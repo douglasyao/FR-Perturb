@@ -1,5 +1,5 @@
 # Factorize-Recover for Perturb-seq analysis (FR-Perturb)
-FR-Perturb is a command-line tool for estimating effect sizes on gene expression from Perturb-seq data. The method is still being actively updated/developed and there are probably bugs. The method is written in both R (used to run the analysis in the paper) and Python. We recommend using the Python version because it is much faster, though the output may be slightly different than the R version due to the use of different packages to perform inference. 
+FR-Perturb is a command-line tool for estimating effect sizes on gene expression from Perturb-seq data. The code is still in preliminary form and will be updated in the future. The method is written in both R (used to run the analysis in the paper) and Python. We recommend using the Python version because it is much faster, though the output may be slightly different than the R version due to the use of different packages to perform inference. 
 
 To use, clone the repository:
 ```
