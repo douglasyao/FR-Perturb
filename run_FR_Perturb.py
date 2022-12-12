@@ -156,8 +156,8 @@ parser.add_argument('--covariates', default=None, type=str,
                     help='Comma-separated list of covariate names to regress out of the expression matrix (names must match the column names in the meta-data of the h5ad object)')
 parser.add_argument('--guide-pooled', default=False, action='store_true',
                     help='Runs the version of FR-Perturb that assumes data is generated from guide pooling')
-parser.add_argument('--droplet-pooled', default=False, action='store_true',
-                    help='Runs the version of FR-Perturb that assumes data is generated from droplet pooling')
+parser.add_argument('--cell-pooled', default=False, action='store_true',
+                    help='Runs the version of FR-Perturb that assumes data is generated from cell pooling')
 parser.add_argument('--num-perms', default=10000, type=int,
                     help='Number of permutations when doing permutation testing')
 parser.add_argument('--fit-zero-pval', default=False, action='store_true',
@@ -192,9 +192,9 @@ if __name__ == '__main__':
     if not args.out:
         raise ValueError('Must specify --out')
         
-    if args.guide_pooled and args.droplet_pooled:
-        raise ValueError('Only one of --guide-pooled and --droplet-pooled should be set')
-    elif args.droplet_pooled:
+    if args.guide_pooled and args.cell_pooled:
+        raise ValueError('Only one of --guide-pooled and --cell-pooled should be set')
+    elif args.cell_pooled:
         overload_type = 'droplet'
     else:
         overload_type = 'guide' # use this version by default
