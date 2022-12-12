@@ -135,13 +135,13 @@ parser = argparse.ArgumentParser()
 
 ### Required flags
 parser.add_argument('--input-h5ad', default=None, type=str,
-                    help='TODO')
+                    help='h5ad file (from the AnnData package) containing raw gene expression counts for all cells')
 parser.add_argument('--input-perturbation-matrix', default=None, type=str,
-                    help='TODO')
+                    help='Whitespace-delimited file containing a table with columns corresponding to cells and rows corresponding to perturbations. Cells containing a given perturbation should be indicated with a "1", otherwise "0".')
 parser.add_argument('--control-perturbation-name', default=None, type=str,
                     help='Comma-separated list of perturbation names that represent control perturbations')
 parser.add_argument('--out', default=None, type=str,
-                    help="Output prefix (including directory) for effect sizes (and optionally p-values)")
+                    help="Output prefix (including directory) for effect sizes")
 
 ### Optional
 parser.add_argument('--compute-pval', default=False, action='store_true',
@@ -153,11 +153,11 @@ parser.add_argument('--lambda1', default=0.1, type=float,
 parser.add_argument('--lambda2', default=10, type=float,
                     help='Hyperparameter determining the sparsity of learned effects during the recover step of the method. Higher value = more sparse.')
 parser.add_argument('--covariates', default=None, type=str,
-                    help='Comma-separated list of covariate names to regress out of the expression matrix (names must match the column names in the meta-data of the Seurat object)')
-parser.add_argument('--guide-overloaded', default=False, action='store_true',
-                    help='Runs the version of FR-Perturb that assumes data is generated from guide-overloading')
-parser.add_argument('--droplet-overloaded', default=False, action='store_true',
-                    help='Runs the version of FR-Perturb that assumes data is generated from droplet-overloading')
+                    help='Comma-separated list of covariate names to regress out of the expression matrix (names must match the column names in the meta-data of the h5ad object)')
+parser.add_argument('--guide-pooled', default=False, action='store_true',
+                    help='Runs the version of FR-Perturb that assumes data is generated from guide pooling')
+parser.add_argument('--droplet-pooled', default=False, action='store_true',
+                    help='Runs the version of FR-Perturb that assumes data is generated from droplet pooling')
 parser.add_argument('--num-perms', default=10000, type=int,
                     help='Number of permutations when doing permutation testing')
 parser.add_argument('--fit-zero-pval', default=False, action='store_true',
@@ -192,16 +192,16 @@ if __name__ == '__main__':
     if not args.out:
         raise ValueError('Must specify --out')
         
-    if args.guide_overloaded and args.droplet_overloaded:
-        raise ValueError('Only one of --guide-overloaded and --droplet-overloaded should be set')
-    elif args.droplet_overloaded:
+    if args.guide_pooled and args.droplet_pooled:
+        raise ValueError('Only one of --guide-pooled and --droplet-pooled should be set')
+    elif args.droplet_pooled:
         overload_type = 'droplet'
     else:
-        overload_type = 'guide'
+        overload_type = 'guide' # use this version by default
         
     log.log('Loading input data...  ')
     dat = scanpy.read_h5ad(args.input_h5ad)
-    p_mat_pd = pd.read_csv(args.input_perturbation_matrix, index_col = 0)
+    p_mat_pd = pd.read_csv(args.input_perturbation_matrix, index_col = 0, delim_whitespace=True)
     if not dat.obs.index.equals(p_mat_pd.columns):
         raise ValueError('Cell names in perturbation matrix do not match cell names in expression matrix')
     log.log('Done')
