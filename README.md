@@ -60,7 +60,7 @@ PERT_3  0 0 1
 
 **13**. `--guide-pooled` specifies whether to run the version of FR-Perturb that assumes data is generated from guide pooling. 
 
-**14**. `--droplet-pooled` specifies whether to run the version of FR-Perturb that assumes data is generated from droplet pooling. 
+**14**. `--cell-pooled` specifies whether to run the version of FR-Perturb that assumes data is generated from cell pooling. 
 
 # Output
 
