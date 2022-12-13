@@ -21,7 +21,7 @@ FR-Perturb is now ready to use. For comments and questions, please contact dougl
 The following command should be used to estimate effect sizes:
 
 `
-./run_FR_Perturb.py --input-h5ad [INPUT_H5AD] --input-perturbation-matrix [INPUT_PERTURBATION_MATRIX] --control-perturbation-name [CONTROL_PERTURBATION_NAME] --covariates [COVARIATES] --compute-pval --fit-zero-pval --out [OUT]
+./run_FR_Perturb.py --input-h5ad [INPUT_H5AD] --input-perturbation-matrix [INPUT_PERTURBATION_MATRIX] --control-perturbation-name [CONTROL_PERTURBATION_NAME] --covariates [COVARIATES] --compute-pval --fit-zero-pval --multithreaded --out [OUT]
 `
 
 ### Required input
@@ -48,17 +48,19 @@ PERT_3  0 0 1
 
 **7**. `--fit-zero-pval` specifies whether or not to fit a skew-normal distribution the null distribution of effect sizes with p=0 from permutation testing. We recommend setting this flag as it allows for p-values below 1/num_perms, though it substantially increases compute time. 
 
-**8**. `--num-perms [NUM_PERMS]` specifies the number of permutations to perform for permutation testing (default 10,000; 500 if `--fit-zero-pval` is set). 
+**8**. `--multithreaded` specifies whether or not use multithreading when fitting skew-normal distributions (can substantially reduce compute time). 
 
-**9**. `--rank [RANK]` specifies a hyperparameter determining the rank of the matrix during the factorize step (default 20).
+**9**. `--num-perms [NUM_PERMS]` specifies the number of permutations to perform for permutation testing (default 10,000; 500 if `--fit-zero-pval` is set). 
 
-**10**. `--lambda1 [LAMBDA1]` specifies a hyperparameter determining the sparsity of the left factor matrix during the factorize step; higher numbers = more sparse. Default 0.1.
+**10**. `--rank [RANK]` specifies a hyperparameter determining the rank of the matrix during the factorize step (default 20).
 
-**11**. `--lambda2 [LAMBDA2]` specifies a hyperparameter determining the sparsity of the effect sizes on latent factors during the recovery step; higher numbers = more sparse. Default 10. 
+**11**. `--lambda1 [LAMBDA1]` specifies a hyperparameter determining the sparsity of the left factor matrix during the factorize step; higher numbers = more sparse. Default 0.1.
 
-**12**. `--guide-pooled` specifies whether to run the version of FR-Perturb that assumes data is generated from guide pooling. 
+**12**. `--lambda2 [LAMBDA2]` specifies a hyperparameter determining the sparsity of the effect sizes on latent factors during the recovery step; higher numbers = more sparse. Default 10. 
 
-**13**. `--droplet-pooled` specifies whether to run the version of FR-Perturb that assumes data is generated from droplet pooling. 
+**13**. `--guide-pooled` specifies whether to run the version of FR-Perturb that assumes data is generated from guide pooling. 
+
+**14**. `--droplet-pooled` specifies whether to run the version of FR-Perturb that assumes data is generated from droplet pooling. 
 
 # Output
 
