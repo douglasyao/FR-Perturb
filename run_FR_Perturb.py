@@ -113,8 +113,9 @@ def scale_effs(B, logmeanexp, downsample_num = 25000, log_exp_baseline = 2):
         raise ValueError('Number of genes differs')
     rand_idx = np.c_[np.random.randint(0, B.shape[0], downsample_num), 
                      np.random.randint(0, B.shape[1], downsample_num)]
-    to_plot = np.c_[logmeanexp[rand_idx[:,1]], np.log(np.abs(B[rand_idx[:,0],rand_idx[:,1]]))]
-    to_plot = to_plot[~np.isinf(to_plot[:,1]),:]
+    to_plot = np.c_[logmeanexp[rand_idx[:,1]], np.abs(B[rand_idx[:,0],rand_idx[:,1]])]
+    to_plot = to_plot[np.where(to_plot[:,1] != 0)[0],:]
+    to_plot[:,1] = np.log(to_plot[:,1])
     fit = sma.nonparametric.lowess(to_plot[:,1], to_plot[:,0], return_sorted=False, xvals = logmeanexp)
     baseline = fit[min(i for i,x in enumerate(logmeanexp) if x > log_exp_baseline)]
     scale_factors = np.exp(fit - baseline)
@@ -261,7 +262,7 @@ if __name__ == '__main__':
         # regress out covariates 
         log.log('Regressing out covariates and centering expression matrix...  ')
         scanpy.pp.normalize_total(dat, target_sum = 10000)
-        logmeanexp = np.log(np.array(dat.X.mean(axis = 0))[0,:])
+        logmeanexp = np.squeeze(np.array(np.log(np.mean(dat.X, axis = 0))))
         scanpy.pp.log1p(dat)
         if args.covariates:
             regress_covariates(dat, cov_mat)
@@ -278,13 +279,13 @@ if __name__ == '__main__':
 
         # Factorize
         log.log('Factorizing expression matrix... ')
-        dat.X = dat.X[:,np.array(dat.X.sum(axis = 0))[0,:] != 0]
+        dat.X = dat.X[:,np.squeeze(np.array(dat.X.sum(axis = 0))) != 0]
         keep_cells = p_mat_pd.sum(axis = 0) > 0
-        p_mat = np.asfortranarray(p_mat_pd.loc[:, keep_cells].T).astype(float)
+        p_mat = np.asfortranarray(p_mat_pd.loc[:, keep_cells].T).astype(np.float32)
         W = spams.trainDL(np.asfortranarray(dat.X.T), K=args.rank, lambda1=args.lambda1, iter=50, verbose=False)
         U_tilde = spams.lasso(np.asfortranarray(dat.X.T), D=W, lambda1=args.lambda1, verbose=False)
         U_tilde = U_tilde[:, keep_cells]
-        U_tilde = np.asfortranarray(U_tilde.T.todense())
+        U_tilde = np.asfortranarray(U_tilde.T.todense()).astype(np.float32)
         W = W.T
         log.log('Done')
 
@@ -328,7 +329,7 @@ if __name__ == '__main__':
                 zero_indices = np.where(pvals == 0)[0]
                 B_flattened = np.ravel(B)
                 
-                if multithreaded:
+                if args.multithreaded:
                     fitted_pvals = thread_map(lambda i: fit_skew_norm(B_flattened[i], B_perms[i,:]), zero_indices) 
                     
                 else: 
@@ -344,8 +345,8 @@ if __name__ == '__main__':
 
             qvals = sms.multitest.multipletests(pvals.flatten(), method = 'fdr_bh')[1]
             qvals = np.reshape(qvals, pvals.shape)
-            pvals = pd.DataFrame(data = np.transpose(pvals), index = dat.var.features, columns = p_mat_pd.index)
-            qvals = pd.DataFrame(data = np.transpose(qvals), index = dat.var.features, columns = p_mat_pd.index)
+            pvals = pd.DataFrame(data = np.transpose(pvals), index = dat.var.index, columns = p_mat_pd.index)
+            qvals = pd.DataFrame(data = np.transpose(qvals), index = dat.var.index, columns = p_mat_pd.index)
             pvals = signif(pvals, 3)
             qvals = signif(qvals, 3)
 
@@ -353,7 +354,7 @@ if __name__ == '__main__':
         B,_ = scale_effs(B, logmeanexp)
         log.log('Done')
         log.log('Outputting results...  ')
-        B = pd.DataFrame(data = np.transpose(B), index = dat.var.features, columns = p_mat_pd.index)
+        B = pd.DataFrame(data = np.transpose(B), index = dat.var.index, columns = p_mat_pd.index)
         B = signif(B, 3)
         B.to_csv(args.out + '_LFCs.txt', sep = '\t')
         if args.compute_pval:
