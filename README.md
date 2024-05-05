@@ -14,7 +14,7 @@ conda env create --file environment.yml
 conda activate FR-Perturb
 ```
 
-FR-Perturb is now ready to use. For comments and questions, please contact douglasyao@g.harvard.edu.
+FR-Perturb is now ready to use. For comments/questions/issues with running the code, please contact douglasyao@g.harvard.edu. 
 
 # Usage
 
