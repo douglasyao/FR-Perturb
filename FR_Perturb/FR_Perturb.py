@@ -5,10 +5,10 @@ import numpy as np
 import pandas as pd
 import scipy 
 import spams
-from sklearn.linear_model import Lasso
+from sklearn.linear_model import Lasso, LassoCV
 from FR_Perturb.utils import *
 
-def factorize_recover(exp_mat, p_mat_pd, rank, lambda1, lambda2, log, iter=50):
+def factorize_recover(exp_mat, p_mat_pd, rank, lambda1, log, alpha=None, iter=50, n_cv=10):
     ''' 
     Normalize expression matrix and run factorize-recover algorithm.
 
@@ -30,8 +30,9 @@ def factorize_recover(exp_mat, p_mat_pd, rank, lambda1, lambda2, log, iter=50):
 
     log.info('Running factorize step...  ')
     # exp_mat = exp_mat[:,np.squeeze(np.array(exp_mat.sum(axis = 0))) != 0]
-    keep_cells = p_mat_pd.sum(axis = 1) > 0
-    p_mat_pd = np.asfortranarray(p_mat_pd[keep_cells]).astype(np.float32)
+    keep_cells = np.array(p_mat_pd.sum(axis = 1) > 0)[:,0]
+    p_mat = p_mat_pd[keep_cells, :]
+    # p_mat_pd = np.asfortranarray(p_mat_pd[keep_cells]).astype(np.float32)
     W = spams.trainDL(exp_mat, K=rank, lambda1=lambda1, iter=iter, verbose=False)
     U_tilde = spams.lasso(exp_mat, D=W, lambda1=lambda1, verbose=False)
     U_tilde = U_tilde[:, keep_cells]
@@ -39,13 +40,24 @@ def factorize_recover(exp_mat, p_mat_pd, rank, lambda1, lambda2, log, iter=50):
     W = W.T
 
     log.info('Running recover step... ')
-    U = spams.lasso(U_tilde, D=p_mat_pd, lambda1=lambda2, verbose=False)
+
+    if alpha is None:
+        U = LassoCV(n_alphas=10, fit_intercept=False)
+        alphas = []
+        for i in range(n_cv):
+            U.fit(p_mat, U_tilde[:,i])
+            alphas.append(U.alpha_)
+        alpha = np.mean(alphas)
+        
+    U = Lasso(alpha = alpha, fit_intercept=False)
+    U.fit(p_mat, U_tilde)
+    U = U.coef_.T
     B = U.dot(W)
     
-    return B, U, U_tilde, W, p_mat_pd
+    return B, U, U_tilde, W, p_mat, alpha
 
 
-def factorize_recover_large_dataset(mat, p_mat_pd, pnames, rank, alpha, n_batches, control_perturbation_name, log, cov_mat=None):
+def factorize_recover_large_dataset(mat, p_mat_pd, pnames, rank, n_batches, control_perturbation_name, log, alpha=None, cov_mat=None, n_cv=10):
     '''
     Normalize expression matrix and perform factorize-recover for a large dataset that cannot be fully stored in memory in dense format. 
 
@@ -102,12 +114,19 @@ def factorize_recover_large_dataset(mat, p_mat_pd, pnames, rank, alpha, n_batche
 
     # recover
     log.info('Running recover step...  ')
+    if alpha is None:
+        U = LassoCV(n_alphas=10, fit_intercept=False)
+        alphas = []
+        for i in range(n_cv):
+            U.fit(p_mat, U_tilde[:,i])
+            alphas.append(U.alpha_)
+        alpha = np.mean(alphas)
     U = Lasso(alpha = alpha, fit_intercept=False)
     U.fit(p_mat, U_tilde)
     U = U.coef_.T
     B = U.dot(W)
 
-    return B, U, U_tilde, W, p_mat
+    return B, U, U_tilde, W, p_mat, alpha
 
 
 def _normalize_and_svd_large_dataset(mat, rank, ctrl_exp, n_batches, log, cov_mat=None, num_iterations=3):

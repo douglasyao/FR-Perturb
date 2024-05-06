@@ -12,12 +12,12 @@ import random
 import logging
 from tqdm.contrib.concurrent import thread_map
 from sklearn.preprocessing import MultiLabelBinarizer
-from sklearn.linear_model import Lasso
+from sklearn.linear_model import Lasso, LassoCV
 from FR_Perturb.FR_Perturb import *
 from FR_Perturb.utils import *
 
 
-# In[3]:
+# In[2]:
 
 
 os.environ['KMP_WARNINGS'] = 'off'
@@ -52,10 +52,10 @@ parser.add_argument('--compute-pval', default=False, action='store_true',
                     help='Whether or not to compute p-values for all effect size estimates by permutation testing (WARNING: this can take a long time).')           
 parser.add_argument('--rank', default=20, type=int,
                     help='Hyperparameter determining the rank of the matrix during the factorize step')
-parser.add_argument('--lambda1', default=0.1, type=float,
+parser.add_argument('--spca-alpha', default=0.1, type=float,
                     help='Hyperparameter determining the sparsity of the factor matrix during the factorize step of the method. Higher value = more sparse.')
-parser.add_argument('--lambda2', default=10, type=float,
-                    help='Hyperparameter determining the sparsity of learned effects during the recover step of the method. Higher value = more sparse.')
+parser.add_argument('--lasso-alpha', default=None, type=float,
+                    help='Hyperparameter determining the sparsity of learned effects during the recover step of the method. Higher value = more sparse. If not specified, will determine automatically through cross-validation.')
 parser.add_argument('--covariates', default=None, type=str,
                     help='Comma-separated list of covariate names to regress out of the expression matrix (names must match the column names in the meta-data of the h5ad object)')
 parser.add_argument('--large-dataset', default=False, action='store_true',
@@ -113,9 +113,6 @@ if __name__ == '__main__':
     log = logging.getLogger(__name__)
 
     try:
-        if args.large_dataset:
-            args.lambda2 = 0.0001
-
         defaults = vars(parser.parse_args(''))
         opts = vars(args)
         non_defaults = [x for x in opts.keys() if opts[x] != defaults[x]]
@@ -195,11 +192,10 @@ if __name__ == '__main__':
         
         # Running factorize recover
         if args.large_dataset:
-            log.info('Start running FR-Perturb (--large_dataset set).')
-            B, U, U_tilde, W, p_mat = factorize_recover_large_dataset(dat.X, p_mat_pd, pnames, args.rank, args.lambda2, args.batches, args.control_perturbation_name, cov_mat=cov_mat, log=log)
+            log.info('(--large-dataset set) Start running FR-Perturb.')
+            B, U, U_tilde, W, p_mat, alpha = factorize_recover_large_dataset(dat.X, p_mat_pd, pnames, args.rank, args.batches, args.control_perturbation_name, cov_mat=cov_mat, log=log, alpha=args.lasso_alpha)
         else:
             log.info('Start running FR-Perturb.')
-            p_mat = pd.DataFrame.sparse.from_spmatrix(p_mat_pd, columns=pnames)
 
             # Normalize matrix
             if cov_mat is not None:
@@ -208,17 +204,18 @@ if __name__ == '__main__':
         
             log.info('Centering expression matrix based on control expression...  ')
             # center expression matrix based on control expression
-            n_guides = p_mat.values.sum(axis = 1)
+            n_guides = p_mat_pd.sum(axis = 1)
             nt_names = args.control_perturbation_name.split(',')
-            ctrl_idx = np.logical_and(n_guides == 1, p_mat.loc[:,nt_names].sum(axis = 1).values != 0)
-            
-            if np.sum(ctrl_idx) < 100:
+            nt_idx = np.where(np.isin(pnames, nt_names))[0]
+            ctrl_idx = np.where(np.logical_and(n_guides == 1, p_mat_pd[:,nt_idx].sum(axis = 1) != 0))[0]
+
+            if len(ctrl_idx) < 100:
                 log.info('WARNING: Too few (<100) control cells, effect sizes will be computed relative to mean expression across all cells instead.')
             else:
                 ctrl_exp = exp_mat[ctrl_idx,:].mean(axis = 0)
                 exp_mat = exp_mat - ctrl_exp
             exp_mat = np.asfortranarray(exp_mat.T)
-            B, U, U_tilde, W, p_mat = factorize_recover(exp_mat, p_mat, args.rank, args.lambda1, args.lambda2, log=log)
+            B, U, U_tilde, W, p_mat, alpha = factorize_recover(exp_mat, p_mat_pd, args.rank, args.spca_alpha, log=log, alpha=args.lasso_alpha)
 
         log.info('Finished running FR-Perturb.')
 
@@ -229,16 +226,13 @@ if __name__ == '__main__':
         # Compute pvalues by permutation testing
         if args.compute_pval:
             if not args.fit_zero_pval:
-                log.info('Computing p-values by permutation testing ({} total permutations)...  '.format(args.num_perms))
+                log.info('(--compute-pvals set) Computing p-values by permutation testing ({} total permutations)...  '.format(args.num_perms))
                 pvals = np.zeros((B.shape))
                 for i in tqdm.tqdm(range(args.num_perms)):
                     p_mat_perm = p_mat[np.random.permutation(p_mat.shape[0]),:]
-                    if args.large_dataset:
-                        U_perm = Lasso(alpha = args.lambda2, fit_intercept=False)
-                        U_perm.fit(p_mat_perm, U_tilde)
-                        U_perm = U_perm.coef_.T
-                    else:
-                        U_perm = spams.lasso(U_tilde, D=np.asfortranarray(p_mat_perm), lambda1=args.lambda2, verbose=False)
+                    U_perm = Lasso(alpha = alpha, fit_intercept=False)
+                    U_perm.fit(p_mat_perm, U_tilde)
+                    U_perm = U_perm.coef_.T
                     B_perm = U_perm.dot(W)
                     temp_indices = B < B_perm
                     pvals[temp_indices] = pvals[temp_indices] + 1
@@ -247,24 +241,21 @@ if __name__ == '__main__':
                 pvals *= 2 
                 pvals = (pvals * args.num_perms + 1) / (args.num_perms + 1)
             else:
-                log.info('Computing p-values by permutation testing ({} total permutations)...  '.format(args.num_perms))
+                log.info('(--compute-pvals set) Computing p-values by permutation testing ({} total permutations)...  '.format(args.num_perms))
                 B_perms = np.empty((np.product(B.shape), args.num_perms))
                 
                 for i in tqdm.tqdm(range(args.num_perms)):
                     p_mat_perm = p_mat[np.random.permutation(p_mat.shape[0]),:]
-                    if args.large_dataset:
-                        U_perm = Lasso(alpha = args.lambda2, fit_intercept=False)
-                        U_perm.fit(p_mat_perm, U_tilde)
-                        U_perm = U_perm.coef_.T
-                    else:
-                        U_perm = spams.lasso(U_tilde, D=np.asfortranarray(p_mat_perm), lambda1=args.lambda2, verbose=False)
+                    U_perm = Lasso(alpha = alpha, fit_intercept=False)
+                    U_perm.fit(p_mat_perm, U_tilde)
+                    U_perm = U_perm.coef_.T
                     B_perm = U_perm.dot(W)
                     B_perms[:,i] = np.ravel(B_perm)
                 pvals = (B_perms < np.ravel(B)[:,np.newaxis]).sum(axis=1) / B_perms.shape[1]
                 pvals[pvals > 0.5] = 1 - pvals[pvals > 0.5] # get 2-sided pvalues
                 pvals *= 2 
 
-                log.info('Fitting skew-normal distribution to effects with p=0 ({} total effects)...  '.format(np.sum(pvals == 0)))
+                log.info('(--fit-zero-pval set) Fitting skew-normal distribution to effects with p=0 ({} total effects)...  '.format(np.sum(pvals == 0)))
                 zero_indices = np.where(pvals == 0)[0]
                 B_flattened = np.ravel(B)
                 
@@ -299,7 +290,7 @@ if __name__ == '__main__':
 
         # Running cross validation
         if args.cross_validate:
-            log.info('Running 2-fold cross validation... ')
+            log.info('(--cross-validate set) Running 2-fold cross validation... ')
             if args.large_dataset:
                 args.cross_validate_runs = 1
             cutoffs=[0.001, 0.01]
@@ -316,9 +307,9 @@ if __name__ == '__main__':
                 for i, split_idx in enumerate(splits):
                     log.info('Split {}'.format(i+1))
                     if args.large_dataset:
-                        B_temp,_,_,_,_ = factorize_recover_large_dataset(dat.X[split_idx,:], p_mat[split_idx,:], pnames, args.rank, args.lambda2, args.batches, args.control_perturbation_name, cov_mat=cov_mat.iloc[split_idx,:], log=log)
+                        B_temp,_,_,_,_,_ = factorize_recover_large_dataset(dat.X[split_idx,:], p_mat[split_idx,:], pnames, args.rank, args.batches, args.control_perturbation_name, alpha=alpha, cov_mat=cov_mat.iloc[split_idx,:], log=log)
                     else:
-                        B_temp,_,_,_,_ = factorize_recover(exp_mat[:,split_idx], p_mat[split_idx,:], args.rank, args.lambda1, args.lambda2, log=log)
+                        B_temp,_,_,_,_,_ = factorize_recover(exp_mat[:,split_idx], p_mat[split_idx,:], args.rank, args.spca_alpha, log=log, alpha=alpha)
                     B_temp,_ = scale_effs(B_temp, logmeanexp)
                     Bs.append(B_temp)
                 cor, sc = compute_correlation(Bs[0], Bs[1], B_scaled.values, cutoffs)
