@@ -57,7 +57,7 @@ def factorize_recover(exp_mat, p_mat_pd, rank, lambda1, log, alpha=None, iter=50
     return B, U, U_tilde, W, p_mat, alpha
 
 
-def factorize_recover_large_dataset(mat, p_mat_pd, pnames, rank, n_batches, control_perturbation_name, log, alpha=None, cov_mat=None, n_cv=10):
+def factorize_recover_large_dataset(mat, p_mat_pd, pnames, rank, n_batches, log, alpha=None, control_perturbation_name=None, cov_mat=None, n_cv=10):
     '''
     Normalize expression matrix and perform factorize-recover for a large dataset that cannot be fully stored in memory in dense format. 
 
@@ -84,19 +84,23 @@ def factorize_recover_large_dataset(mat, p_mat_pd, pnames, rank, n_batches, cont
         cov_mat = cov_mat.values - cov_means[np.newaxis, :] # Center covariates
         cov_mat = np.c_[np.ones((cov_mat.shape[0], 1)), cov_mat] # Append intercept
 
-    log.info('Getting mean control expression...   ')
-    n_guides = p_mat_pd.sum(axis = 1)
-    nt_names = control_perturbation_name.split(',')
-    nt_idx = np.where(np.isin(pnames, nt_names))[0]
+    if control_perturbation_name is not None:
+        log.info('Getting mean control expression...   ')
+        n_guides = p_mat_pd.sum(axis = 1)
+        nt_names = control_perturbation_name.split(',')
+        nt_idx = np.where(np.isin(pnames, nt_names))[0]
     
-    if len(nt_idx) != len(nt_names):
-        raise ValueError('Provided control perturbation names not found in data.')
+        if len(nt_idx) != len(nt_names):
+            raise ValueError('Provided control perturbation names not found in data.')
+        
+        ctrl_idx = np.where(np.logical_and(n_guides == 1, p_mat_pd[:,nt_idx].sum(axis = 1) != 0))[0]
     
-    ctrl_idx = np.where(np.logical_and(n_guides == 1, p_mat_pd[:,nt_idx].sum(axis = 1) != 0))[0]
-
-    if len(ctrl_idx) < 100:
-        log.info('WARNING: Too few (<100) control cells, effect sizes will be computed relative to mean expression across all cells instead.')
+        if len(ctrl_idx) < 100:
+            log.info('WARNING: Too few (<100) control cells, effect sizes will be computed relative to mean expression across all cells instead.')
+            ctrl_idx = np.array(range(mat.shape[0]))
+    else:
         ctrl_idx = np.array(range(mat.shape[0]))
+    
     if cov_mat is not None:
         ctrl_exp = regress_covariates_and_get_mean_expression_large_dataset(mat, cov_mat, n_batches, ctrl_idx)
     else:

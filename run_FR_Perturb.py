@@ -10,6 +10,7 @@ import os
 import tqdm
 import random
 import logging
+import warnings
 from tqdm.contrib.concurrent import thread_map
 from sklearn.preprocessing import MultiLabelBinarizer
 from sklearn.linear_model import Lasso, LassoCV
@@ -28,62 +29,73 @@ MASTHEAD += "*******************************************************************
 
 parser = argparse.ArgumentParser()
 
-### Required flags
+################ Required flags ##################
 parser.add_argument('--input-h5ad', default=None, type=str,
                     help='h5ad file (from the AnnData package) containing raw gene expression counts for all cells')
-parser.add_argument('--control-perturbation-name', default=None, type=str,
-                    help='Comma-separated list of perturbation names that represent control perturbations')
 parser.add_argument('--out', default=None, type=str,
                     help="Output prefix (including directory) for effect sizes")
 
-### Either need to specify 
+# Either need to specify 
 parser.add_argument('--input-perturbation-matrix', default=None, type=str,
                     help='Whitespace-delimited file containing a table with columns corresponding to cells and rows corresponding to perturbations. Cells containing a given perturbation should be indicated with a "1", otherwise "0".')
-### Or
+# Or
 parser.add_argument('--perturbation-column-name', default=None, type=str,
                     help='Column name in the cell annotation matrix (stored in `.obs` in the h5ad object) that corresponds to which perturbations are in the cell.')
-parser.add_argument('--perturbation-delimiter', default='--', type=str,
+parser.add_argument('--perturbation-delimiter', default=None, type=str,
                     help='Delimiter used to separate perturbations in each cell (if the cell contains multiple perturbations). If the delimiter includes a double-dash --, then please enclose in both double and single quotes (e.g. '"--"'). This is a hack, sorry.')
+###################################################
 
-### Optional
-parser.add_argument('--separate-control-perturbations', default=False, action='store_true',
-                    help='Separately infer effects for each individual control perturbation. By default, all separate control perturbations are combined into a single "control" category.')
-parser.add_argument('--compute-pval', default=False, action='store_true',
-                    help='Whether or not to compute p-values for all effect size estimates by permutation testing (WARNING: this can take a long time).')           
-parser.add_argument('--rank', default=20, type=int,
-                    help='Hyperparameter determining the rank of the matrix during the factorize step')
-parser.add_argument('--spca-alpha', default=0.1, type=float,
-                    help='Hyperparameter determining the sparsity of the factor matrix during the factorize step of the method. Higher value = more sparse.')
-parser.add_argument('--lasso-alpha', default=None, type=float,
-                    help='Hyperparameter determining the sparsity of learned effects during the recover step of the method. Higher value = more sparse. If not specified, will determine automatically through cross-validation.')
+
+### Optional I/O
 parser.add_argument('--covariates', default=None, type=str,
-                    help='Comma-separated list of covariate names to regress out of the expression matrix (names must match the column names in the meta-data of the h5ad object)')
-parser.add_argument('--large-dataset', default=False, action='store_true',
-                    help='Set this flag if dataset is too large to load into memory (>1M cells). Uses memory-efficient randomized partial SVD during factorize step of factorize-recover. --lambda1 parameter will be ignored.')
-parser.add_argument('--batches', default=5, type=int,
-                    help='Batch size when --large-dataset is set. Increasing this number reduces the amount of memory but increases running time.')
-parser.add_argument('--guide-pooled', default=False, action='store_true',
-                    help='Runs the version of FR-Perturb that assumes data is generated from guide pooling')
-parser.add_argument('--cell-pooled', default=False, action='store_true',
-                    help='Runs the version of FR-Perturb that assumes data is generated from cell pooling')
+                    help='Comma-separated list of covariate names to regress out of the expression matrix (names must be found in the column names of `.obs` of the h5ad object)')
+parser.add_argument('--control-perturbation-name', default=None, type=str,
+                    help='If you want to compute effect sizes relative to mean expression in control cells rather than mean expression across all cells, specify a comma-separated list of control perturbation names here.')
+parser.add_argument('--combine-control-perturbations', default=False, action='store_true',
+                    help='Combine all separate control perturbations into a single "control" category when inferring effects.')
+parser.add_argument('--output-factor-matrices', default=False, action='store_true',
+                    help='Whether or not to output the latent gene expression factor matrices in addition to the full effect sizes matrix')
+parser.add_argument('--gene-column-name', default=None, type=str,
+                    help='Which column (by name) of `.var` in the h5ad object represents gene names. By default, the index is assumed to be gene names.')
+
+# Significance testing
+parser.add_argument('--compute-pval', default=False, action='store_true',
+                    help='Whether or not to compute p-values for all effect size estimates by permutation testing.')           
 parser.add_argument('--num-perms', default=1000, type=int,
                     help='Number of permutations when doing permutation testing')
 parser.add_argument('--fit-zero-pval', default=False, action='store_true',
                     help='Compute p-values by fitting skew-normal distribution to null distribution (allows for p-values below 1/num_perms, but significantly increases compute time)')
 parser.add_argument('--multithreaded', default=False, action='store_true',
-                    help='Use multithreading to fit skew-normal distributions, which can substantially reduce compute time')
-parser.add_argument('--output-factor-matrices', default=False, action='store_true',
-                    help='Whether or not to output the latent gene expression factor matrices in addition to the full effect sizes matrix')
+                    help='Use multithreading to fit skew-normal distributions.')
 
+# For running large datasets
+parser.add_argument('--large-dataset', default=False, action='store_true',
+                    help='Set this flag if dataset is large (>1M cells). Uses memory-efficient randomized partial SVD during factorize step of factorize-recover. --lambda1 parameter will be ignored.')
+parser.add_argument('--batches', default=5, type=int,
+                    help='Batch size when --large-dataset is set. Increasing this number reduces the amount of memory but increases running time.')
 
-## Cross-validation                    
+# Cross-validation                    
 parser.add_argument('--cross-validate', default=False, action='store_true',
                     help='Perform 2-fold cross-validation on input data')
 parser.add_argument('--cross-validate-runs', default=2, type=int,
                     help='Number of times to repeat cross-validation. Cross-validation accuracy is averaged across runs.')
 
+# Hyperparameters
+parser.add_argument('--rank', default=20, type=int,
+                    help='Hyperparameter determining the rank of the matrix during the factorize step')
+parser.add_argument('--spca-alpha', default=0.1, type=float,
+                    help='Hyperparameter determining the sparsity of the factor matrix during the factorize step of the method. Higher value = more sparse.')
+parser.add_argument('--lasso-alpha', default=0.0001, type=float,
+                    help='Hyperparameter determining the sparsity of learned effects during the recover step of the method. Higher value = more sparse. If not specified, will determine automatically through cross-validation.')
 
-# In[ ]:
+# For guide/cell pooled experiments
+parser.add_argument('--guide-pooled', default=False, action='store_true',
+                    help='Runs the version of FR-Perturb that assumes data is generated from guide pooling')
+parser.add_argument('--cell-pooled', default=False, action='store_true',
+                    help='Runs the version of FR-Perturb that assumes data is generated from cell pooling')
+
+
+# In[4]:
 
 
 if __name__ == '__main__':
@@ -97,11 +109,11 @@ if __name__ == '__main__':
     #                   '--out', '/n/scratch/users/d/dwy6/asdf',
     #                   '--covariates', 'Total_RNA_count,Percent_mitochondrial_reads,S_score,G2M_score'])
 
-    # args = parser.parse_args(['--input-h5ad', '/n/scratch/users/d/dwy6/scperturb/data/GasperiniShendure2019_atscale.h5ad',
-    #                   '--perturbation-column-name', 'barcode',
-    #                   '--control-perturbation-name', 'AATGAGGAGCAAACGAAAAT,ACGAAATGTTTCATGACCAA,ATAGATTTACGTTACTCTCT,ATTAGCATCAGGTAGACTAA,CCATAAAGAATTCGGTGTAG,CGAAAATGGGTGCGTGGACT,CGAAGGATCAAAGCGACTTT,CGTATTTCTCTTAGAGATCA,GAGAAAAGTCGTTCTACAAA,GCGTCCCTAGGGTATTTTAC,TCTTGGCCTGCTTGGTGTCT,CTCACCTGTGGGAGTAACGG,ACCGCTGCCCTAACCACTGG,ACTGCCTCGCGATTGACTGG,AGAGTGTAGATACGTTGGTG,AGCCTAACGATCGGACCGAG,AGCTCTTGCGGTAAATCGTG,ATGCGGCGAACTGCCGTAAG,CAAAGGCTGAGGAGCGGTGG,CAATCAGCGACTGCTGCTGG,CACCACTGGCATGCTTGAAG,CACCGGGACTCGGGAGTGCG,CAGGATCGCTATCAGCACGG,CCACATACGAAATGCCAACG,CCACCTTCGAAGTCCGTATG,CCCTCAAGGGCACGTTTAGG,CGGTGGGGCCGCTCACTAGG,CTATTCGCCAACTTGTTACG,CTCACCGTAGAGACGGCACG,CTGAACTTCGGTAAAGGCGG,CTGCAACGTGGTGCTGCCGG,GAACTCAATAGTGAGAGCGG,GACCTCCTGTGATCAGGTGG,GCGAACAGCGAGGGCCCCTG,GCGACATTTGGGTCGCGAAG,GCGGCGCCTGTAAGCCCCTG,GCTGTATATCGGCGCCCCGG,GGACGAGTAACCTGCCGGGG,GGCATCGGGCAGACGGGATG,GGGCAGTCGTAACTCTAAGG,GGGGACTTGCTCCAGGACGG,GTACCCGCTAAGGAGCGCGG,GTGCCCGGAGCTACATGGCG,TAAACTCATGGTCCTGAAGG,TAAGGGCGACGTTCGGTAAG,TAAGGGCGCCCGAATCGCCG,TAGCTTGCACTCCCCTTGTG,TATTCGTACCGGGCAGCAGG,TGTCCAGTTCCGTAGGATGG,TGTTGTGAGAGCATCCGGAG,TTGGGAATGCGAGGCAAAGG,CTAAAGCATTGGCTGAGAAG,AATCATGGTGGAAGGTGAAG,GATATGTTATTGAAATCTAA,TCTAATCTCAGCTACTTGGG,GTAGTTCACATAATCCCTGT,GCCTTGTTTCTATTTGTAGA,AACACAACACACCAAAACTG,GATGTTTTATATAATCCCCA,AAGTTGACTCTACATAGCAG,AATATTCTCCCTCATTCTGG,AATCCTCTAATGGACGAAGA,ACACACACAGAGAAATATAG,AGAATTTCTTTGAACCCGGG,AGAGGTAACCAAAATAGCAA,AGATACCTATGGCCATATAG,AGGAATCCAGCAATCCCACA,AGTTCTAGAGCACTGAGCAA,ATAGAAGGAGGATGAGGGGA,ATAGGCCAGTTACAATTTGG,ATATGTAACCTCCAGAATGA,ATATTCAGCAGCTAAAGCAT,ATGTGTATATTAACATAGGG,ATTGGCAGTCTCTAAGAAGT,ATTGGTATCCGTATAAGCAG,CACCCTCCTGGGGAAGACCA,CCTGACAATCAATCTCCAAG,CGAGTTGTAAGCCCTTAAAA,CTATAGGGTATGAAGAGCAA,GATGAAGAAGTATAAAGCAG,GCAAATGCTTCATCACCCCA,GCCTGCAGAAAGCTTCCCTG,GCTCTAATGAACAGAATGGG,GCTGGGGAGACCCAACCCAG,GGGCAACCCCAGGAAGACCG,GTAGCCTCTGTTCCTCAGTA,GTAGCTTTATGAGAACCACT,GTGGCCCTACTGAGGAACAG,TACAACTGCATTACATGCCA,TATCTCAGAGTACTATTCCA,TCAGGGGTCGATCTTTAACC,TCCGCAGTCAAAAGACCGAG,TCTGCTAAACTGCCTACACA,TGAACAATACTCCAGTACAT,TGCATCTTCTGAAATGGCAG,TTAAAATTGATTCTGCCACT,TTAAGGGCTTACAACTCGAA,TTAATTCCTCTGGCGCCGCT,TTAGCTTTGAAAACACACAC,TTATCTCTATTTGACAGACG,TTTCTCTGTAAGTTACCATG',
-    #                   '--covariates', 'total_umis,nperts,percent.mito,prep_batch',
-    #                   '--perturbation-delimiter', '_',
+    # args = parser.parse_args(['--input-h5ad', '/n/scratch/users/d/dwy6/scperturb/data/ReplogleWeissman2022_K562_essential.h5ad',
+    #                   '--perturbation-column-name', 'perturbation',
+    #                   '--control-perturbation-name', 'control',
+    #                   '--covariates', 'percent_mito,UMI_count',
+    #                   '--large-dataset',
     #                   '--out', '/n/scratch/users/d/dwy6/asdf'])
 
     logging.basicConfig(
@@ -130,8 +142,6 @@ if __name__ == '__main__':
             raise ValueError('Must specify --input-h5ad')
         if (args.input_perturbation_matrix is None) == (args.perturbation_column_name is None):
             raise ValueError('Must specify exactly one of --input-perturbation-matrix or --perturbation-column-name')
-        if not args.control_perturbation_name:
-            raise ValueError('Must specify --control-perturbation-name')
         if not args.out:
             raise ValueError('Must specify --out')
         if args.guide_pooled and args.cell_pooled:
@@ -141,59 +151,94 @@ if __name__ == '__main__':
         else:
             overload_type = 'guide' # use this version by default
 
-        log.info('Loading input data from {}...  '.format(args.input_h5ad))
+        log.info('Loading input h5ad from {}...  '.format(args.input_h5ad))
         dat = scanpy.read_h5ad(args.input_h5ad)
         
         # get perturbation matrix
         if args.input_perturbation_matrix:
+            log.info('Loading input perturbation matrix from {}...  '.format(args.input_perturbation_matrix))
             p_mat_pd = pd.read_csv(args.input_perturbation_matrix, index_col = 0, delim_whitespace=True)
             if not dat.obs.index.equals(p_mat_pd.columns):
                 raise ValueError('Cell names in perturbation matrix do not match cell names in expression matrix')
         else:
             perts = dat.obs[args.perturbation_column_name]
-            if args.perturbation_delimiter[0] == '\"' and args.perturbation_delimiter[-1] == '\"': # if delimiter includes double dash
-                args.perturbation_delimiter = args.perturbation_delimiter[1:-1]
-
+            if isinstance(perts.dtype, pd.api.types.CategoricalDtype):
+                if 'nan' not in perts.cat.categories: # replace empty perturbations with 'nan'
+                    perts = perts.cat.add_categories(['nan'])
+            perts[pd.isnull(perts)] = 'nan'
             mlb = MultiLabelBinarizer(sparse_output=True)
-            p_mat_pd = mlb.fit_transform(perts.str.split(args.perturbation_delimiter))
+
+            if args.perturbation_delimiter is not None:
+                if args.perturbation_delimiter[0] == '\"' and args.perturbation_delimiter[-1] == '\"': # if delimiter includes double dash
+                    args.perturbation_delimiter = args.perturbation_delimiter[1:-1]
+                p_mat_pd = mlb.fit_transform(perts.str.split(args.perturbation_delimiter, regex = False))
+            else:
+                p_mat_pd = mlb.fit_transform([[x] for x in perts.values])
             pnames=mlb.classes_
 
-        pert_idx = np.where(np.isin(pnames, args.control_perturbation_name.split(',')))[0]
-        if len(pert_idx) != len(args.control_perturbation_name.split(',')):
-            raise ValueError('Provided control perturbation names not found in data. Please also double check that delimiter is specified correctly.')
+        # getting control perturbation info
+        if args.control_perturbation_name is not None:
+            pert_idx = np.where(np.isin(pnames, args.control_perturbation_name.split(',')))[0]
+            if len(pert_idx) != len(args.control_perturbation_name.split(',')):
+                raise ValueError('Provided control perturbation names not found in data. Please also double check that delimiter is specified correctly.')
 
-        if not args.separate_control_perturbations and len(args.control_perturbation_name.split(',')) > 1: # combine control perturbations into one category
-            ctrl_perts = p_mat_pd[:,pert_idx]
-            ctrl_perts = ctrl_perts.max(axis = 1)
-            mask = np.ones(p_mat_pd.shape[1], dtype=bool)
-            mask[pert_idx] = False
-            p_mat_pd = scipy.sparse.hstack([p_mat_pd[:,mask], ctrl_perts], format='csr')
-            pnames = np.append(pnames[mask], 'control')
-            args.control_perturbation_name = 'control'
-        
-        # center rows of p_mat
-        if overload_type == 'droplet':
-            guides_per_cell = np.array(p_mat_pd.sum(axis = 1))
-            vals = np.repeat(guides_per_cell, p_mat_pd.getnnz(axis=1))
-            p_mat_pd.data = p_mat_pd.data / vals
+            if args.combine_control_perturbations and len(args.control_perturbation_name.split(',')) > 1: # combine control perturbations into one category
+                ctrl_perts = p_mat_pd[:,pert_idx]
+                ctrl_perts = ctrl_perts.max(axis = 1)
+                mask = np.ones(p_mat_pd.shape[1], dtype=bool)
+                mask[pert_idx] = False
+                p_mat_pd = scipy.sparse.hstack([p_mat_pd[:,mask], ctrl_perts], format='csr')
+                pnames = np.append(pnames[mask], 'control')
+                args.control_perturbation_name = 'control'
 
         # get covariates
         if args.covariates is not None:
             cov_names = args.covariates.split(',')
             cov_mat = dat.obs[cov_names]
+            if np.sum(pd.isnull(cov_mat.values)) > 0: # remove cells with NaNs in covariates
+                nan_idx = np.where(pd.isnull(cov_mat))
+                nan_idx = np.unique(nan_idx[0])
+                keep_idx = np.setdiff1d(list(range(dat.shape[0])),nan_idx)
+                dat = dat[keep_idx,:]
+                p_mat_pd = p_mat_pd[keep_idx,:]
+                cov_mat = dat.obs[cov_names]
+                log.info('Filtered {} cells with NaN in covariates'.format(len(nan_idx)))
         else:
             cov_mat = None
 
+        # remove genes with 0 expression
+        prev_count = dat.shape[1]
+        scanpy.pp.filter_genes(dat, min_cells=1)
+        after_count = dat.shape[1]
+        log.info('Filtered {} genes with 0 expression across all cells'.format(prev_count - after_count))
+
+        # remove cells with 0 counts
+        prev_count = dat.shape[0]
+        keep_cells = scanpy.pp.filter_cells(dat, min_counts=1, inplace=False)[0]
+        dat = dat[keep_cells,:]
+        p_mat_pd = p_mat_pd[keep_cells,:]
+        log.info('Filtered {} cells with 0 expression across all genes'.format(prev_count - np.sum(keep_cells)))
+
+        log.info('Retained {} cells and {} genes for analysis'.format(dat.shape[0], dat.shape[1]))
+        
+        # normalize rows of p_mat if cell-pooled
+        if overload_type == 'droplet':
+            guides_per_cell = np.array(p_mat_pd.sum(axis = 1))
+            vals = np.repeat(guides_per_cell, p_mat_pd.getnnz(axis=1))
+            p_mat_pd.data = p_mat_pd.data / vals
+
         # convert raw counts to log(TP10K+1) 
         log.info('Converting raw counts to log(TP10K+1)...  ')
-        scanpy.pp.normalize_total(dat, target_sum = 10000)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            scanpy.pp.normalize_total(dat, target_sum = 10000)
         logmeanexp = np.squeeze(np.array(np.log(np.mean(dat.X, axis = 0)))) # for scaling later
         scanpy.pp.log1p(dat)
         
         # Running factorize recover
         if args.large_dataset:
             log.info('(--large-dataset set) Start running FR-Perturb.')
-            B, U, U_tilde, W, p_mat, alpha = factorize_recover_large_dataset(dat.X, p_mat_pd, pnames, args.rank, args.batches, args.control_perturbation_name, cov_mat=cov_mat, log=log, alpha=args.lasso_alpha)
+            B, U, U_tilde, W, p_mat, alpha = factorize_recover_large_dataset(dat.X, p_mat_pd, pnames, args.rank, args.batches, control_perturbation_name=args.control_perturbation_name, cov_mat=cov_mat, log=log, alpha=args.lasso_alpha)        
         else:
             log.info('Start running FR-Perturb.')
 
@@ -201,27 +246,37 @@ if __name__ == '__main__':
             if cov_mat is not None:
                 log.info('Regressing out covariates...  ')
                 exp_mat = regress_covariates(dat.X, cov_mat)
-        
-            log.info('Centering expression matrix based on control expression...  ')
-            # center expression matrix based on control expression
-            n_guides = p_mat_pd.sum(axis = 1)
-            nt_names = args.control_perturbation_name.split(',')
-            nt_idx = np.where(np.isin(pnames, nt_names))[0]
-            ctrl_idx = np.where(np.logical_and(n_guides == 1, p_mat_pd[:,nt_idx].sum(axis = 1) != 0))[0]
 
-            if len(ctrl_idx) < 100:
-                log.info('WARNING: Too few (<100) control cells, effect sizes will be computed relative to mean expression across all cells instead.')
+            if args.control_perturbation_name is not None:
+                log.info('Centering expression matrix based on control expression...  ')
+                # center expression matrix based on control expression
+                n_guides = p_mat_pd.sum(axis = 1)
+                nt_names = args.control_perturbation_name.split(',')
+                nt_idx = np.where(np.isin(pnames, nt_names))[0]
+                ctrl_idx = np.where(np.logical_and(n_guides == 1, p_mat_pd[:,nt_idx].sum(axis = 1) != 0))[0]
+    
+                if len(ctrl_idx) < 100:
+                    log.info('WARNING: Too few (<100) control cells, effect sizes will be computed relative to mean expression across all cells instead.')
+                    ctrl_exp = exp_mat.mean(axis=0)
+                else:
+                    ctrl_exp = exp_mat[ctrl_idx,:].mean(axis=0)
             else:
-                ctrl_exp = exp_mat[ctrl_idx,:].mean(axis = 0)
-                exp_mat = exp_mat - ctrl_exp
+                log.info('Centering expression matrix...  ')
+                ctrl_exp = exp_mat.mean(axis=0)
+            
+            exp_mat = exp_mat - ctrl_exp        
             exp_mat = np.asfortranarray(exp_mat.T)
             B, U, U_tilde, W, p_mat, alpha = factorize_recover(exp_mat, p_mat_pd, args.rank, args.spca_alpha, log=log, alpha=args.lasso_alpha)
 
         log.info('Finished running FR-Perturb.')
 
         # Scaling effects
-        log.info('Scaling effects...  ')
-        B_scaled, _ = scale_effs(B, logmeanexp)            
+        log.info('Scaling effects...  ')        
+        B_scaled, _ = scale_effs(B, logmeanexp) 
+        if args.gene_column_name is not None:
+            gnames = dat.var[args.gene_column_name].values
+        else:
+            gnames = dat.var.index
 
         # Compute pvalues by permutation testing
         if args.compute_pval:
@@ -275,13 +330,13 @@ if __name__ == '__main__':
 
             qvals = sms.multitest.multipletests(pvals.flatten(), method = 'fdr_bh')[1]
             qvals = np.reshape(qvals, pvals.shape)
-            pvals = pd.DataFrame(data = np.transpose(pvals), index = dat.var.index, columns = pnames)
-            qvals = pd.DataFrame(data = np.transpose(qvals), index = dat.var.index, columns = pnames)
+            pvals = pd.DataFrame(data = np.transpose(pvals), index = gnames, columns = pnames)
+            qvals = pd.DataFrame(data = np.transpose(qvals), index = gnames, columns = pnames)
             pvals = signif(pvals, 3)
             qvals = signif(qvals, 3)
 
         log.info('Outputting results...  ')
-        B_scaled = pd.DataFrame(data = np.transpose(B_scaled), index = dat.var.index, columns = pnames)
+        B_scaled = pd.DataFrame(data = np.transpose(B_scaled), index = gnames, columns = pnames)
         B_scaled = signif(B_scaled, 3)
         B_scaled.to_csv(args.out + '_LFCs.txt', sep = '\t')
         if args.compute_pval:
@@ -293,9 +348,10 @@ if __name__ == '__main__':
             log.info('(--cross-validate set) Running 2-fold cross validation... ')
             if args.large_dataset:
                 args.cross_validate_runs = 1
-            cutoffs=[0.001, 0.01]
+
             all_cor = []
             all_sc = []
+
             for i in range(args.cross_validate_runs):
                 log.info('Run {} of {}... '.format(i+1, args.cross_validate_runs))
                 n_cells = dat.X.shape[0]
@@ -307,17 +363,46 @@ if __name__ == '__main__':
                 for i, split_idx in enumerate(splits):
                     log.info('Split {}'.format(i+1))
                     if args.large_dataset:
-                        B_temp,_,_,_,_,_ = factorize_recover_large_dataset(dat.X[split_idx,:], p_mat[split_idx,:], pnames, args.rank, args.batches, args.control_perturbation_name, alpha=alpha, cov_mat=cov_mat.iloc[split_idx,:], log=log)
+                        B_temp,_,_,_,_,_ = factorize_recover_large_dataset(dat.X[split_idx,:], p_mat[split_idx,:], pnames, args.rank, args.batches, control_perturbation_name=args.control_perturbation_name, alpha=alpha, cov_mat=cov_mat.iloc[split_idx,:], log=log)
                     else:
                         B_temp,_,_,_,_,_ = factorize_recover(exp_mat[:,split_idx], p_mat[split_idx,:], args.rank, args.spca_alpha, log=log, alpha=alpha)
                     B_temp,_ = scale_effs(B_temp, logmeanexp)
                     Bs.append(B_temp)
-                cor, sc = compute_correlation(Bs[0], Bs[1], B_scaled.values, cutoffs)
-                all_cor.append(cor)
-                all_sc.append(sc)
+
+                Bs = [x.flatten() for x in Bs]
+
+                temp_cors = []
+                temp_sc = []
+                if args.compute_pval: # compute correlation using significant effects
+                    cnames = ['q<{}_effects'.format(x) for x in [0.05, 0.2]]
+                    
+                    for cutoff in [0.05, 0.2]:
+                        idxs = (qvals.values < cutoff).flatten()
+                        if np.sum(idxs) == 0:
+                            cor = np.nan
+                            sc = np.nan
+                        else:    
+                            cor = np.corrcoef(Bs[0][idxs], Bs[1][idxs])[0,1]
+                            sc = sign_concord(Bs[0][idxs], Bs[1][idxs])
+                        temp_cors.append(cor)
+                        temp_sc.append(sc)
+                else: # compute correlation using top x% of effects by magnitude
+
+                    cnames = ['Top_{}%_effects'.format(x) for x in [0.1, 1]]
+                    sort_idxs = np.argsort(-np.abs(B_scaled.values.flatten()))
+                    cutoffs = np.round(np.array([0.001, 0.01]) * len(sort_idxs)).astype(int)
+
+                    for cutoff in cutoffs:
+                        cor = np.corrcoef(Bs[0][sort_idxs[:cutoff]], Bs[1][sort_idxs[:cutoff]])[0,1]
+                        sc = sign_concord(Bs[0][sort_idxs[:cutoff]], Bs[1][sort_idxs[:cutoff]])
+                        temp_cors.append(cor)
+                        temp_sc.append(sc)
+                all_cor.append(temp_cors)
+                all_sc.append(temp_sc)
+                    
             all_cor = np.array(all_cor).mean(axis=0)
             all_sc = np.array(all_sc).mean(axis=0)
-            cv_out = pd.DataFrame([all_cor, all_sc], columns=['Top_{}%_effects'.format(x*100) for x in cutoffs], index=['Correlation', 'Sign_concordance']).T
+            cv_out = pd.DataFrame([all_cor, all_sc], columns=cnames, index=['Correlation', 'Sign_concordance']).T
             cv_out.to_csv(args.out + '_twofold_cross_validation_results.txt', sep = '\t')
 
         log.info('All done!')       

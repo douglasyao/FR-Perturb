@@ -163,15 +163,15 @@ def regress_covariates_and_get_mean_expression_large_dataset(mat, cov_mat, n_bat
         temp_mat = mat[:,start:end]
 
         if scipy.sparse.issparse(temp_mat):
-            temp_mat = temp_mat.todense()
+            temp_mat = np.array(temp_mat.todense())
             
         temp_reg = scipy.linalg.lstsq(cov_mat, temp_mat, lapack_driver='gelsy')[0]
         temp_mat = temp_mat - cov_mat.dot(temp_reg)
         temp_mat = temp_mat[idxs]
-        final_mat[start:end] = np.array(temp_mat.mean(axis=0))[0,:]
+        final_mat[start:end] = temp_mat.mean(axis=0)
     return final_mat
 
-def compute_correlation(mat1, mat2, sort, cutoffs):
+def compute_correlation(mat1, mat2, idxs, sort, cutoffs):
     '''
     Compute correlation between two matrices
     '''
