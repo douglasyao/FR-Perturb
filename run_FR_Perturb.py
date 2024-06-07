@@ -37,7 +37,7 @@ parser.add_argument('--out', default=None, type=str,
 
 # Either need to specify 
 parser.add_argument('--input-perturbation-matrix', default=None, type=str,
-                    help='Whitespace-delimited file containing a table with columns corresponding to cells and rows corresponding to perturbations. Cells containing a given perturbation should be indicated with a "1", otherwise "0".')
+                    help='Whitespace-delimited file containing a table with rows corresponding to cells and columns corresponding to perturbations. Cells containing a given perturbation should be indicated with a "1", otherwise "0".')
 # Or
 parser.add_argument('--perturbation-column-name', default=None, type=str,
                     help='Column name in the cell annotation matrix (stored in `.obs` in the h5ad object) that corresponds to which perturbations are in the cell.')
@@ -109,11 +109,10 @@ if __name__ == '__main__':
     #                   '--out', '/n/scratch/users/d/dwy6/asdf',
     #                   '--covariates', 'Total_RNA_count,Percent_mitochondrial_reads,S_score,G2M_score'])
 
-    # args = parser.parse_args(['--input-h5ad', '/n/scratch/users/d/dwy6/scperturb/data/ReplogleWeissman2022_K562_essential.h5ad',
+    # args = parser.parse_args(['--input-h5ad', '/n/scratch/users/d/dwy6/scperturb/data/ShifrutMarson2018_stimulated.h5ad',
     #                   '--perturbation-column-name', 'perturbation',
     #                   '--control-perturbation-name', 'control',
-    #                   '--covariates', 'percent_mito,UMI_count',
-    #                   '--large-dataset',
+    #                   '--covariates', 'percent_mito,ncounts,replicate',
     #                   '--out', '/n/scratch/users/d/dwy6/asdf'])
 
     logging.basicConfig(
@@ -158,8 +157,10 @@ if __name__ == '__main__':
         if args.input_perturbation_matrix:
             log.info('Loading input perturbation matrix from {}...  '.format(args.input_perturbation_matrix))
             p_mat_pd = pd.read_csv(args.input_perturbation_matrix, index_col = 0, delim_whitespace=True)
-            if not dat.obs.index.equals(p_mat_pd.columns):
+            if not dat.obs.index.equals(p_mat_pd.index):
                 raise ValueError('Cell names in perturbation matrix do not match cell names in expression matrix')
+            pnames = p_mat_pd.columns
+            p_mat_pd = np.matrix(p_mat_pd)
         else:
             perts = dat.obs[args.perturbation_column_name]
             if isinstance(perts.dtype, pd.api.types.CategoricalDtype):
@@ -175,7 +176,7 @@ if __name__ == '__main__':
             else:
                 p_mat_pd = mlb.fit_transform([[x] for x in perts.values])
             pnames=mlb.classes_
-
+        
         # getting control perturbation info
         if args.control_perturbation_name is not None:
             pert_idx = np.where(np.isin(pnames, args.control_perturbation_name.split(',')))[0]
