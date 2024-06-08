@@ -22,7 +22,7 @@ In order to estimate perturbation effect sizes, two things need to provided:
 **1**. A raw expression count matrix, stored as an .h5ad file (from the AnnData package).
 
 **2**. The perturbation status of each cell. This data can be specified in two ways:  
-- **Option 1**. A cell x perturbation binary indicator matrix. This is specified as a separate whitespace-delimited file whose contents should look something like this:
+- **Option 1**. A cell x perturbation binary indicator matrix. This is provided as a separate whitespace-delimited file whose contents should look something like this:
 ```
 Cell_Barcode  Pert_1  Pert_2 Control  ...
 Cell_1  1 0 0 
@@ -51,7 +51,7 @@ For Option 1, the following command should be used to estimate effect sizes:
 
 **1**. `--input-h5ad [INPUT_H5AD]` specifies an h5ad file name (from the AnnData package) containing raw gene expression counts for all cells. Sample-level covariates should be found in the `obs` variable (see [here](https://anndata.readthedocs.io/en/latest/tutorials/notebooks/getting-started.html) for info on AnnData objects).   
 
-**2**. `--input-perturbation-matrix [INPUT_PERTURBATION_MATRIX]` specifies a file name containing a whitespace-delimited table with columns corresponding to perturbations and rows corresponding to cells. Cells containing a given perturbation should be indicated with a "1", otherwise "0". The row names in this file should match the cell names in the h5ad file i.e. the row names of the `obs` variable (otherwise the method will throw an error). The column names should correspond to the perturbation names. An example is shown below:
+**2**. `--input-perturbation-matrix [INPUT_PERTURBATION_MATRIX]` specifies a file name containing a whitespace-delimited table with columns corresponding to perturbations and rows corresponding to cells. Cells containing a given perturbation should be indicated with a "1", otherwise "0". The row names in this file should match the cell names in the h5ad file, i.e. the row names of the `obs` variable (otherwise the method will throw an error). The column names should correspond to the perturbation names. An example is shown below:
 
 ```
 Cell_Barcode  Pert_1  Pert_2 Control  ...
@@ -62,7 +62,7 @@ Cell_4  1 1 0
 ...
 ```
 
-**3**. `--control-perturbation-name [CONTROL_PERTURBATION_NAME]` (Optional). Typically, perturbation effect sizes are computed relative to cells containing a control perturbation, so these cells should be present in the expression matrix. This flag specifies the perturbation name corresponding to a control guide. The name must be present in the column names of the input perturbation matrix. If multiple different columns correspond to control guides, then their names can be provided as a list separated by commas, e.g. `ctrl_pert1,ctrl_pert2,ctrl_pert3`. If this flag is not set, then perturbation effect sizes will be computed relative to the mean expression across all cells. 
+**3**. `--control-perturbation-name [CONTROL_PERTURBATION_NAME]` (Optional). Typically, perturbation effect sizes are computed relative to cells containing a control perturbation, so these control cells should be present in the expression matrix. This flag specifies the perturbation name corresponding to a control guide. The name must be present in the column names of the input perturbation matrix. If multiple different columns correspond to control guides, then their names can be provided as a list separated by commas, e.g. `ctrl_pert1,ctrl_pert2,ctrl_pert3`. If this flag is not set, then perturbation effect sizes will be computed relative to the mean expression across all cells. 
 
 **4**. `--covariates [COVARIATES]` (Optional). This optional flag specifies a comma-separated list of covariate names to regress out of the expression matrix, e.g. `cov_1,cov_2,cov_3`. These names must be present in the column names of the `obs` variable in the h5ad file. 
 
@@ -80,7 +80,7 @@ For Option 2, the following command should be used to estimate effect sizes:
 
 **1**. `--input-h5ad [INPUT_H5AD]` specifies an h5ad file name (from the AnnData package) containing raw gene expression counts for all cells. Sample-level covariates should be found in the `obs` variable (see [here](https://anndata.readthedocs.io/en/latest/tutorials/notebooks/getting-started.html) for info on AnnData objects).   
 
-**2**. `--perturbation-column-name [PERTURBATION_COLUMN_NAME]` specifies which column name in the cell metadata matrix (stored in `.obs` in the h5ad object) corresponds to perturbation information. The values in this column should represent which perturbations (by name) are present in each cell. For the below example, the column corresponds to `Perturbation`. 
+**2**. `--perturbation-column-name [PERTURBATION_COLUMN_NAME]` specifies which column name in the cell metadata matrix (stored in `.obs` in the h5ad object) corresponds to perturbation information. The values in this column should represent which perturbations (by name) are present in each cell. In the below example, the column `Perturbation` contains this info. 
 
 ```
 Cell_Barcode  Perturbation  Covariate_1  Covariate_2  ...
@@ -93,7 +93,7 @@ Cell_4  Pert_1:Pert_2  0.22  45
 
 **3**. `--perturbation-delimiter [PERTURBATION_DELIMITER]` (Optional). If a cell contains multiple perturbations, then its value in the perturbation metadata column `.obs[PERTURBATION_COLUMN_NAME]` should correspond to the names of the perturbations separated by some delimiter. In the above example, `Cell_4` contains two perturbations `Pert_1` and `Pert_2` as denoted by `Pert_1:Pert_2`. If this flag is set to the delimiter (in this case `:`), then multiple perturbations within each cells will be separated, and effect sizes will only be estimated for individual perturbations. If this flag is not set, then pertubation effect sizes will be estimated for every distinct combination of perturbations. 
 
-**4**. `--control-perturbation-name [CONTROL_PERTURBATION_NAME]` (Optional). Typically, perturbation effect sizes are computed relative to cells containing a control perturbation, so these cells should be present in the expression matrix. This flag specifies the perturbation name corresponding to a control guide. The name must be present in `.obs[PERTURBATION_COLUMN_NAME]`. If multiple different columns correspond to control guides, then their names can be provided as a list separated by commas, e.g. `ctrl_pert1,ctrl_pert2,ctrl_pert3`. If this flag is not set, then perturbation effect sizes will be computed relative to the mean expression across all cells. 
+**4**. `--control-perturbation-name [CONTROL_PERTURBATION_NAME]` (Optional). Typically, perturbation effect sizes are computed relative to cells containing a control perturbation, so these control cells should be present in the expression matrix. This flag specifies the perturbation name corresponding to a control guide. The name must be present in `.obs[PERTURBATION_COLUMN_NAME]`. If multiple different columns correspond to control guides, then their names can be provided as a list separated by commas, e.g. `ctrl_pert1,ctrl_pert2,ctrl_pert3`. If this flag is not set, then perturbation effect sizes will be computed relative to the mean expression across all cells. 
 
 **5**. `--covariates [COVARIATES]` (Optional). This optional flag specifies a comma-separated list of covariate names to regress out of the expression matrix, e.g. `cov_1,cov_2,cov_3`. These names must be present in the column names of the `obs` variable in the h5ad file. 
 
@@ -116,13 +116,13 @@ If `--compute-pval` is set, then FR-Perturb will also output additional two file
 <br /><br />
 # Other options
 
-FR-Perturb has many other options that can be used to tweak data processing, model hyperparamters, p-value calculation, and other things. 
+FR-Perturb has additional options that can be used to tweak data processing, model hyperparameters, p-value calculation, and other things. 
 
 ### Data processing
 
-**1**. `--large-dataset`. This flag should be set if memory is an issue when processing the dataset using FR-Perturb with default parameters. With 100G of RAM, default FR-Perturb can handle datasets with ~500K cells. If set, FR-Perturb can handle datasets with up to millions of cells. It uses memory-efficient randomized partial SVD rather than sparse PCA during factorize step of factorize-recover. 
+**1**. `--large-dataset`. This flag should be set if memory is an issue when processing the dataset using FR-Perturb with default parameters. With 100G of RAM, default FR-Perturb can handle datasets with ~300K cells. If set, FR-Perturb can handle datasets with up to millions of cells, though compute time is substantially increased. It uses memory-efficient randomized partial SVD rather than sparse PCA during factorize step of factorize-recover. 
 
-**2**. `--batches [BATCHES]`. If `--large-dataset` is set, then data is processed in batches. This flag specifies how many batches to use. Increasing this number reduces the amount of memory but increases running time. Default 10. 
+**2**. `--batches [BATCHES]`. If `--large-dataset` is set, then data is processed in batches. This flag specifies how many batches to use. Increasing this number reduces the amount of memory but increases compute time. Default 10. 
 
 **3**. `--gene-column-name [GENE_COLUMN_NAME]`. By default, FR-Perturb will assume that the index of `.var` of the AnnData object represents gene names when outputting results. If a different column of `.var` corresponds to the desired gene names, then the column name should be specified with this flag. 
 
@@ -144,13 +144,13 @@ FR-Perturb has many other options that can be used to tweak data processing, mod
 
 ### Cross-validation
 
-**1**. `--cross-validate`. FR-Perturb provides the option to perform 2-fold cross validation of the perturbation effects. The input dataset is split in half, then perturbation effect sizes are separately estimated in each half and their consistency with each other is assessed. If `--compute-pval` is set, then correlation and sign consistency will be assessed for all significant effects will be assessed. The output will look something like this:
+**1**. `--cross-validate`. FR-Perturb provides the option to perform 2-fold cross validation of the perturbation effects. The input dataset is split in half, then perturbation effect sizes are separately estimated in each half and their consistency with each other is assessed. If `--compute-pval` is set, then correlation and sign consistency will be computed for all significant effects. The output will look something like this:
 ```
         Correlation     Sign_concordance
 q<0.05_effects  0.83     0.95
 q<0.2_effects   0.62      0.82
 ```
-If `--compute-pval` is not set, then correlation and sign consistency will be assessed for the largest effects by magnitude. The output will look something like this:
+If `--compute-pval` is not set, then correlation and sign consistency will be compute for the largest effects by magnitude. The output will look something like this:
 ```
         Correlation     Sign_concordance
 Top_0.1%_effects        0.74     0.87
