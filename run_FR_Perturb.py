@@ -160,7 +160,7 @@ if __name__ == '__main__':
             if not dat.obs.index.equals(p_mat_pd.index):
                 raise ValueError('Cell names in perturbation matrix do not match cell names in expression matrix')
             pnames = p_mat_pd.columns
-            p_mat_pd = np.matrix(p_mat_pd)
+            p_mat_pd = scipy.sparse.csr_matrix(p_mat_pd.values)
         else:
             perts = dat.obs[args.perturbation_column_name]
             if isinstance(perts.dtype, pd.api.types.CategoricalDtype):
