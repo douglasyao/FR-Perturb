@@ -40,7 +40,6 @@ Cell_3  Pert_2  0.29  12
 Cell_4  Pert_1:Pert_2  0.22  45
 ...
 ```
-
 ### Option 1
 
 For Option 1, the following command should be used to estimate effect sizes:
@@ -114,17 +113,47 @@ Gene_3  -0.61 0.24 1.2
 
 If `--compute-pval` is set, then FR-Perturb will also output additional two files with suffixes `_pvals.txt` and `_qvals.txt` containing p-values (with the same rows and columns as the effect size file) and q-values (computed using the Benjamini-Hochberg procedure) respectively. 
 <br /><br />
+
+# Options for large datasets
+If your Perturb-seq dataset is large (i.e. greater than around 250,000 cells) and you're having trouble running FR-Perturb due to memory issues, or if FR-Perturb is taking too long to compute p-values, then the following flags may be useful.
+
+**1**. `--large-dataset`. This flag should be set if memory is an issue when processing the dataset using FR-Perturb with default parameters. With 100G of RAM, default FR-Perturb can handle datasets with ~250K cells. If this flag is set, FR-Perturb can handle datasets with up to millions of cells, though compute time is substantially increased. It uses memory-efficient randomized partial SVD rather than sparse PCA during factorize step of factorize-recover. 
+
+**2**. `--batches [BATCHES]`. If `--large-dataset` is set, then data is processed in batches. This flag specifies how many batches to use. Increasing this number reduces the amount of memory but increases compute time. Default 10. 
+
+**3**. `--temp-out [TEMP_OUT]`. Set this flag if you want to compute p-values in separate batches, which you might want to do if computing p-values in the main script takes too long. These batches can be run in parallel to reduce running time, but you need to implement the parallelization yourself (sorry). If you use a compute cluster then this can be easily done by submitting each batch as a separate job. There are three steps: 
+- **Step 1.** Run the main script with the `--temp-out` flag and specify a temporary output prefix (including the full path) to save a temporary file needed to perform permutations. Example:
+  - `./run_FR_Perturb.py --input-h5ad [INPUT_H5AD] --input-perturbation-matrix [INPUT_PERTURBATION_MATRIX] --temp-out [TEMP_OUT] --out [OUT]`. 
+- **Step 2.** Run multiple instances of the compute_pvalues_batched.py script in parallel. Example:
+  - `for BATCH_NUMBER in 1:NUM_BATCHES (parallelize this however you'd like); do ./compute_pvalues_batched.py --input-prefix [TEMP_OUT] --batch-number [BATCH_NUMBER] --perms-per-batch [PERMS_PER_BATCH]`
+  - `--input-prefix [TEMP_OUT]`. This argument should be exactly the same as `[TEMP_OUT]` from Step 1.
+  - `--batch-number [BATCH_NUMBER]`. This should be some unique number for the given batch of permutations. You can set it to whatever number you like as long as each batch gets a unique number. 
+  - `--perms-per-batch [PERMS_PER_BATCH]`. This should be an integer that specifies how many permutations to perform for the given batch. The total number of perturbations will be the total number of times you run the script multipled by the number of permutations per batch. A reasonable option is to run 40 instances of the compute_pvalues_batched.py script with 25 permutations per batch, resulting in 1000 total pertutations. 
+- **Step 3.** After all the previous scripts have finished, run the compute_pvalues batched.py script one more time to combine the permutation files and compute p-values:
+  - `./compute_pvalues_batched.py --input-prefix [TEMP_OUT] --combine-pval-files --out [OUT]`
+  - `--input-prefix [TEMP_OUT]`. This argument should be exactly the same as `[TEMP_OUT]` from Step 1.
+  - `--out [OUT]`. Output file prefix for the pvalues, including the directory. This can match `[OUT]` from Step 1, or you can set it to something different if you want. 
+
+To summarize, this is an example sequence of commands you should run to compute p-values in batches:
+```
+./run_FR_Perturb.py --input-h5ad [INPUT_H5AD] --input-perturbation-matrix [INPUT_PERTURBATION_MATRIX] --temp-out [TEMP_OUT] --out [OUT]
+
+## Submit each instance of the loop as a separate job, or parallelize this however else you'd like
+for BATCH_NUMBER in {1..40}; do
+  ./compute_pvalues_batched.py --input-prefix [TEMP_OUT] --batch-number [BATCH_NUMBER] --perms-per-batch 25
+done
+
+./compute_pvalues_batched.py --input-prefix [TEMP_OUT] --combine-pval-files --out [OUT]
+```
+
+
 # Other options
 
 FR-Perturb has additional options that can be used to tweak data processing, model hyperparameters, p-value calculation, and other things. 
 
-### Data processing
+### Output
 
-**1**. `--large-dataset`. This flag should be set if memory is an issue when processing the dataset using FR-Perturb with default parameters. With 100G of RAM, default FR-Perturb can handle datasets with ~300K cells. If set, FR-Perturb can handle datasets with up to millions of cells, though compute time is substantially increased. It uses memory-efficient randomized partial SVD rather than sparse PCA during factorize step of factorize-recover. 
-
-**2**. `--batches [BATCHES]`. If `--large-dataset` is set, then data is processed in batches. This flag specifies how many batches to use. Increasing this number reduces the amount of memory but increases compute time. Default 10. 
-
-**3**. `--gene-column-name [GENE_COLUMN_NAME]`. By default, FR-Perturb will assume that the index of `.var` of the AnnData object represents gene names when outputting results. If a different column of `.var` corresponds to the desired gene names, then the column name should be specified with this flag. 
+**1**. `--gene-column-name [GENE_COLUMN_NAME]`. By default, FR-Perturb will assume that the index of `.var` of the AnnData object represents gene names when outputting results. If a different column of `.var` corresponds to the desired gene names, then the column name should be specified with this flag. 
 
 ### Significance testing 
 
@@ -136,25 +165,34 @@ FR-Perturb has additional options that can be used to tweak data processing, mod
 
 ### Model hyperparameters
 
-**1**. `--rank [RANK]` specifies the rank of the matrix during the factorize step of factorize-recover. Default 20. 
+**1**. `--rank [RANK]` specifies the rank of the matrix during the factorize step of factorize-recover. Default 20. We tested this number across a bunch of Perturb-seq datasets and it's sensible.  
 
-**2**. `--spca-alpha [SPCA_ALPHA]` specifies a hyperparameter determining the sparsity of the factor matrix during the factorize step of factorize-recover. Higher value = more sparse. Default 0.1. 
+**2**. `--spca-alpha [SPCA_ALPHA]` specifies a hyperparameter determining the sparsity of the factor matrix during the factorize step of factorize-recover. Higher value = more sparse. Default 0.1. We tested this number across a bunch of Perturb-seq datasets and it's sensible.  
 
-**3**. `--lasso-alpha [LASSO_ALPHA]` specifies a hyperparameter determining the sparsity of learned effects during the recover step of factorize-recover. Higher value = more sparse. Default 0.0001. 
+**3**. `--lasso-alpha [LASSO_ALPHA]` specifies a hyperparameter determining the sparsity of learned effects during the recover step of factorize-recover. Higher value = more sparse. Default 0.0001. We tested this number across a bunch of Perturb-seq datasets and it's sensible.  
+
+### Running other perturbation effect inference methods
+
+**1**. `--elastic-net`. Estimate effect sizes using elastic net as done in Dixit et al. 2016 Cell rather than FR-Perturb. 
+
+**2**. `--elastic-net-genes-per-batch`. Optional argument to split up the inference over batches of downstream genes to reduce memory usage. Input is the number of genes in each batch (larger = fewer batches but more memory).
 
 ### Cross-validation
 
-**1**. `--cross-validate`. FR-Perturb provides the option to perform 2-fold cross validation of the perturbation effects. The input dataset is split in half, then perturbation effect sizes are separately estimated in each half and their consistency with each other is assessed. If `--compute-pval` is set, then correlation and sign consistency will be computed for all significant effects. The output will look something like this:
-```
-        Correlation     Sign_concordance
-q<0.05_effects  0.83     0.95
-q<0.2_effects   0.62      0.82
-```
-If `--compute-pval` is not set, then correlation and sign consistency will be compute for the largest effects by magnitude. The output will look something like this:
+**1**. `--cross-validate`. FR-Perturb provides the option to perform 2-fold cross validation of the perturbation effects. The input dataset is split in half, then perturbation effect sizes are separately estimated in each half and their consistency with each other is assessed. If `--compute-pval` is not set, then correlation and sign consistency will be compute for the largest effects by magnitude. The output will look something like this:
 ```
         Correlation     Sign_concordance
 Top_0.1%_effects        0.74     0.87
 Top_1.0%_effects        0.45     0.77
+```
+
+If `--compute-pval` is set, then correlation and sign consistency will be computed for the largest effects by magnitude as well as all significant effects. The output will look something like this:
+```
+        Correlation     Sign_concordance
+Top_0.1%_effects        0.74     0.87
+Top_1.0%_effects        0.45     0.77
+q<0.05_effects  0.83     0.95
+q<0.2_effects   0.62      0.82
 ```
 
 **2**. `--cross-validate-runs [CROSS_VALIDATE_RUNS]`. Number of times to repeat cross-validation. Cross-validation accuracy is averaged across runs. Default 2. 
