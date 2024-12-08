@@ -132,6 +132,36 @@ def factorize_recover_large_dataset(mat, p_mat_pd, pnames, rank, n_batches, log,
 
     return B, U, U_tilde, W, p_mat, alpha
 
+def compute_interactions(p_mat, condition_mat, resid, alpha):
+    '''
+    Compute interaction terms.
+
+    Parameters:
+    - p_mat: First-order perturbation design matrix. n x p numpy array. n: number of cells. p: number of perturbations. 
+    - condition_mat: First-order condition design matrix. n x c numpy array. n: number of cells. c: number of conditions.
+    - resid: Residual of left factor matrix after regressing out first-order perturbation effects. n x m numpy array. n: number of cells. m: number of modules. 
+    - alpha: Lasso tuning parameter
+
+    Returns: 
+    - interaction_first_order_terms: First-order condition effects. c x m numpy array. c: number of conditions. m: number of modules. 
+    - interaction_second_order_terms: Second-order perturbation x condition interaction effects. c*p x m numpy array. 
+    '''
+    
+    interaction_first_order_terms = Lasso(alpha = alpha, fit_intercept=False)
+    interaction_first_order_terms.fit(condition_mat, resid)
+    interaction_first_order_terms = interaction_first_order_terms.coef_.T
+
+    resid = resid - condition_mat.dot(interaction_first_order_terms)
+
+    interaction_second_order_mat = p_mat[:, :, np.newaxis] * condition_mat[:, np.newaxis, :]
+    interaction_second_order_mat = interaction_second_order_mat.reshape(p_mat.shape[0], p_mat.shape[1] * condition_mat.shape[1])
+
+    interaction_second_order_terms = Lasso(alpha = alpha, fit_intercept=False)
+    interaction_second_order_terms.fit(interaction_second_order_mat, resid)
+    interaction_second_order_terms = interaction_second_order_terms.coef_.T
+
+    return interaction_first_order_terms, interaction_second_order_terms
+
 
 def _normalize_and_svd_large_dataset(mat, rank, ctrl_exp, n_batches, log, cov_mat=None, num_iterations=3):
     '''

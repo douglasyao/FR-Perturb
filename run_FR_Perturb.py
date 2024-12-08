@@ -11,9 +11,10 @@ import tqdm
 import random
 import logging
 import warnings
+import pickle
 from tqdm.contrib.concurrent import thread_map
 from sklearn.preprocessing import MultiLabelBinarizer
-from sklearn.linear_model import Lasso, LassoCV
+from sklearn.linear_model import Lasso, LassoCV, ElasticNet
 from FR_Perturb.FR_Perturb import *
 from FR_Perturb.utils import *
 
@@ -58,6 +59,10 @@ parser.add_argument('--output-factor-matrices', default=False, action='store_tru
 parser.add_argument('--gene-column-name', default=None, type=str,
                     help='Which column (by name) of `.var` in the h5ad object represents gene names. By default, the index is assumed to be gene names.')
 
+# Interactions
+parser.add_argument('--interaction-column-name', default=None, type=str,
+                    help='Comma-separated list of variable names to compute interaction terms for (names must be found in the column names of `.obs` of the h5ad object)')
+
 # Significance testing
 parser.add_argument('--compute-pval', default=False, action='store_true',
                     help='Whether or not to compute p-values for all effect size estimates by permutation testing.')           
@@ -67,6 +72,8 @@ parser.add_argument('--fit-zero-pval', default=False, action='store_true',
                     help='Compute p-values by fitting skew-normal distribution to null distribution (allows for p-values below 1/num_perms, but significantly increases compute time)')
 parser.add_argument('--multithreaded', default=False, action='store_true',
                     help='Use multithreading to fit skew-normal distributions.')
+parser.add_argument('--temp-out', default=None, type=str,
+                    help='Temporary file name, including directory (for batched permutation testing).')
 
 # For running large datasets
 parser.add_argument('--large-dataset', default=False, action='store_true',
@@ -94,26 +101,19 @@ parser.add_argument('--guide-pooled', default=False, action='store_true',
 parser.add_argument('--cell-pooled', default=False, action='store_true',
                     help='Runs the version of FR-Perturb that assumes data is generated from cell pooling')
 
+# Inference type
+parser.add_argument('--elastic-net', default=False, action='store_true',
+                    help='Estimate effect sizes using elastic net (as done in Dixit et al. 2016 Cell) rather than FR-Perturb')
+parser.add_argument('--elastic-net-genes-per-batch', default=None, type=int,
+                    help='Split up the inference over batches of downstream genes to reduce memory usage. Input is the number of genes in each batch (larger = fewer batches but more memory)')
 
-# In[4]:
+
+# In[ ]:
 
 
 if __name__ == '__main__':
 
     args = parser.parse_args()
-
-    # args = parser.parse_args(['--input-h5ad', '/n/scratch/users/d/dwy6/frperturb_testing/GSM6858448_KO_cell_pooled.h5ad',
-    #                   '--perturbation-column-name', 'Guides_collapsed_by_gene',
-    #                   '--perturbation-delimiter', '"--"',
-    #                   '--control-perturbation-name', 'non-targeting,safe-targeting',
-    #                   '--out', '/n/scratch/users/d/dwy6/asdf',
-    #                   '--covariates', 'Total_RNA_count,Percent_mitochondrial_reads,S_score,G2M_score'])
-
-    # args = parser.parse_args(['--input-h5ad', '/n/scratch/users/d/dwy6/scperturb/data/ShifrutMarson2018_stimulated.h5ad',
-    #                   '--perturbation-column-name', 'perturbation',
-    #                   '--control-perturbation-name', 'control',
-    #                   '--covariates', 'percent_mito,ncounts,replicate',
-    #                   '--out', '/n/scratch/users/d/dwy6/asdf'])
 
     logging.basicConfig(
         format="%(asctime)s %(name)s %(levelname)s: %(message)s",
@@ -159,7 +159,7 @@ if __name__ == '__main__':
             p_mat_pd = pd.read_csv(args.input_perturbation_matrix, index_col = 0, delim_whitespace=True)
             if not dat.obs.index.equals(p_mat_pd.index):
                 raise ValueError('Cell names in perturbation matrix do not match cell names in expression matrix')
-            pnames = p_mat_pd.columns
+            pnames = p_mat_pd.columns.values
             p_mat_pd = scipy.sparse.csr_matrix(p_mat_pd.values)
         else:
             perts = dat.obs[args.perturbation_column_name]
@@ -218,6 +218,7 @@ if __name__ == '__main__':
         keep_cells = scanpy.pp.filter_cells(dat, min_counts=1, inplace=False)[0]
         dat = dat[keep_cells,:]
         p_mat_pd = p_mat_pd[keep_cells,:]
+        cov_mat = cov_mat.loc[keep_cells,:]
         log.info('Filtered {} cells with 0 expression across all genes'.format(prev_count - np.sum(keep_cells)))
 
         log.info('Retained {} cells and {} genes for analysis'.format(dat.shape[0], dat.shape[1]))
@@ -235,41 +236,84 @@ if __name__ == '__main__':
             scanpy.pp.normalize_total(dat, target_sum = 10000)
         logmeanexp = np.squeeze(np.array(np.log(np.mean(dat.X, axis = 0)))) # for scaling later
         scanpy.pp.log1p(dat)
-        
-        # Running factorize recover
-        if args.large_dataset:
-            log.info('(--large-dataset set) Start running FR-Perturb.')
-            B, U, U_tilde, W, p_mat, alpha = factorize_recover_large_dataset(dat.X, p_mat_pd, pnames, args.rank, args.batches, control_perturbation_name=args.control_perturbation_name, cov_mat=cov_mat, log=log, alpha=args.lasso_alpha)        
-        else:
-            log.info('Start running FR-Perturb.')
 
-            # Normalize matrix
-            if cov_mat is not None:
-                log.info('Regressing out covariates...  ')
-                exp_mat = regress_covariates(dat.X, cov_mat)
-
-            if args.control_perturbation_name is not None:
-                log.info('Centering expression matrix based on control expression...  ')
-                # center expression matrix based on control expression
-                n_guides = p_mat_pd.sum(axis = 1)
-                nt_names = args.control_perturbation_name.split(',')
-                nt_idx = np.where(np.isin(pnames, nt_names))[0]
-                ctrl_idx = np.where(np.logical_and(n_guides == 1, p_mat_pd[:,nt_idx].sum(axis = 1) != 0))[0]
-    
-                if len(ctrl_idx) < 100:
-                    log.info('WARNING: Too few (<100) control cells, effect sizes will be computed relative to mean expression across all cells instead.')
-                    ctrl_exp = exp_mat.mean(axis=0)
-                else:
-                    ctrl_exp = exp_mat[ctrl_idx,:].mean(axis=0)
+        # Running elastic net
+        if args.elastic_net:
+            log.info('Start running elastic net (--elastic-net set).')
+            if args.elastic_net_genes_per_batch is not None:
+                B = np.zeros((p_mat_pd.shape[1], dat.X.shape[1]))
+                idxs = list(range(0, dat.X.shape[1], args.elastic_net_genes_per_batch)) + [dat.X.shape[1]]
+                for i in range(len(idxs)-1):
+                    log.info('Analyzing batch {} of {}.'.format(i+1, len(idxs)-1))
+                    B_temp = ElasticNet(l1_ratio = 0.5, alpha = 0.0005, max_iter = 10000)
+                    temp_mat = dat.X[:,idxs[i]:idxs[i+1]]
+                    if scipy.sparse.issparse(temp_mat):
+                        temp_mat = np.array(temp_mat.todense())
+                    B_temp = B_temp.fit(p_mat_pd, temp_mat)
+                    B_temp = B_temp.coef_.T
+                    B[:,idxs[i]:idxs[i+1]] = B_temp
             else:
-                log.info('Centering expression matrix...  ')
-                ctrl_exp = exp_mat.mean(axis=0)
-            
-            exp_mat = exp_mat - ctrl_exp        
-            exp_mat = np.asfortranarray(exp_mat.T)
-            B, U, U_tilde, W, p_mat, alpha = factorize_recover(exp_mat, p_mat_pd, args.rank, args.spca_alpha, log=log, alpha=args.lasso_alpha)
+                B = ElasticNet(l1_ratio = 0.5, alpha = 0.0005, max_iter = 10000)
+                temp_mat = dat.X
+                if scipy.sparse.issparse(temp_mat):
+                    temp_mat = np.array(temp_mat.todense())
+                B = B.fit(p_mat_pd, temp_mat)
+                B = B.coef_.T
 
-        log.info('Finished running FR-Perturb.')
+        else:   
+            # Running factorize recover
+            if args.large_dataset:
+                log.info('Start running FR-Perturb (--large-dataset set).')
+                B, U, U_tilde, W, p_mat, alpha = factorize_recover_large_dataset(dat.X, p_mat_pd, pnames, args.rank, args.batches, control_perturbation_name=args.control_perturbation_name, cov_mat=cov_mat, log=log, alpha=args.lasso_alpha)        
+            else:
+                log.info('Start running FR-Perturb.')
+    
+                # Normalize matrix
+                if cov_mat is not None:
+                    log.info('Regressing out covariates...  ')
+                    exp_mat = regress_covariates(dat.X, cov_mat)
+                else:
+                    exp_mat = dat.X
+    
+                if args.control_perturbation_name is not None:
+                    log.info('Centering expression matrix based on control expression...  ')
+                    # center expression matrix based on control expression
+                    n_guides = p_mat_pd.sum(axis = 1)
+                    nt_names = args.control_perturbation_name.split(',')
+                    nt_idx = np.where(np.isin(pnames, nt_names))[0]
+                    ctrl_idx = np.where(np.logical_and(n_guides == 1, p_mat_pd[:,nt_idx].sum(axis = 1) != 0))[0]
+        
+                    if len(ctrl_idx) < 100:
+                        log.info('WARNING: Too few (<100) control cells, effect sizes will be computed relative to mean expression across all cells instead.')
+                        ctrl_exp = exp_mat.mean(axis=0)
+                    else:
+                        ctrl_exp = exp_mat[ctrl_idx,:].mean(axis=0)
+                else:
+                    log.info('Centering expression matrix...  ')
+                    ctrl_exp = exp_mat.mean(axis=0)
+                
+                exp_mat = exp_mat - ctrl_exp        
+                exp_mat = np.asfortranarray(exp_mat.T)
+                B, U, U_tilde, W, p_mat, alpha = factorize_recover(exp_mat, p_mat_pd, args.rank, args.spca_alpha, log=log, alpha=args.lasso_alpha)
+    
+            # Computing interactions
+            if args.interaction_column_name is not None:
+                log.info('Computing interaction terms...  ')
+                resid = U_tilde - p_mat.dot(U)
+    
+                interaction_names = args.interaction_column_name.split(',')
+                interaction_mat = dat.obs[interaction_names]
+                interaction_mat = pd.get_dummies(interaction_mat)
+                p_mat_dense = np.array(p_mat.todense())
+    
+                interaction_names = ['{}_{}'.format(pnames[x], interaction_mat.columns[y]) for x in range(p_mat_dense.shape[1]) for y in range(interaction_mat.shape[1])]
+                
+                pnames = np.concatenate([pnames, interaction_mat.columns.values, interaction_names])
+                interaction_first_order_terms, interaction_second_order_terms = compute_interactions(p_mat_dense, interaction_mat.values, resid, alpha)
+                U = np.r_[U, interaction_first_order_terms, interaction_second_order_terms]
+                B = U.dot(W)
+            
+            log.info('Finished analysis.')
 
         # Scaling effects
         log.info('Scaling effects...  ')        
@@ -279,24 +323,48 @@ if __name__ == '__main__':
         else:
             gnames = dat.var.index
 
+        log.info('Outputting effects...  ')
+        B_scaled = pd.DataFrame(data = np.transpose(B_scaled), index = gnames, columns = pnames)
+        B_scaled = signif(B_scaled, 3)
+        B_scaled.to_csv(args.out + '_LFCs.txt', sep = '\t')
+
+        if args.temp_out:
+            log.info('Outputting temporary files for batched permutation testing...  ')
+
+            os.makedirs(os.path.dirname(args.temp_out), exist_ok=True)
+            temp_out = [args, pnames, gnames, U_tilde, W, B, p_mat, alpha]
+            if args.interaction_column_name:
+                temp_out.append(interaction_mat)
+
+            with open(args.temp_out + '.pkl', 'wb') as f:
+                pickle.dump(temp_out, f)
+
         # Compute pvalues by permutation testing
-        if args.compute_pval:
+        if args.compute_pval and not args.temp_out:
             if not args.fit_zero_pval:
                 log.info('(--compute-pvals set) Computing p-values by permutation testing ({} total permutations)...  '.format(args.num_perms))
                 pvals = np.zeros((B.shape))
                 for i in tqdm.tqdm(range(args.num_perms)):
-                    p_mat_perm = p_mat[np.random.permutation(p_mat.shape[0]),:]
+                    perm_idxs = np.random.permutation(p_mat.shape[0])
+                    p_mat_perm = p_mat[perm_idxs,:]
                     U_perm = Lasso(alpha = alpha, fit_intercept=False)
                     U_perm.fit(p_mat_perm, U_tilde)
                     U_perm = U_perm.coef_.T
                     B_perm = U_perm.dot(W)
+                    if args.interaction_column_name: 
+                        p_mat_perm = np.array(p_mat_perm.todense())
+                        resid_perm = U_tilde - p_mat_perm.dot(U_perm)
+                        interaction_mat_perm = interaction_mat.iloc[perm_idxs,:]
+                        interaction_first_order_terms_perm, interaction_second_order_terms_perm = compute_interactions(p_mat_perm, interaction_mat_perm.values, resid_perm, alpha)                       
+                        U_perm = np.r_[U_perm, interaction_first_order_terms_perm, interaction_second_order_terms_perm]
+                        B_perm = U_perm.dot(W)
                     temp_indices = B < B_perm
                     pvals[temp_indices] = pvals[temp_indices] + 1
                 pvals /= args.num_perms
                 pvals[pvals > 0.5] = 1 - pvals[pvals > 0.5] # get 2-sided pvalues
                 pvals *= 2 
                 pvals = (pvals * args.num_perms + 1) / (args.num_perms + 1)
-            else:
+            else: 
                 log.info('(--compute-pvals set) Computing p-values by permutation testing ({} total permutations)...  '.format(args.num_perms))
                 B_perms = np.empty((np.product(B.shape), args.num_perms))
                 
@@ -306,6 +374,15 @@ if __name__ == '__main__':
                     U_perm.fit(p_mat_perm, U_tilde)
                     U_perm = U_perm.coef_.T
                     B_perm = U_perm.dot(W)
+                    
+                    if args.interaction_column_name: 
+                        p_mat_perm = np.array(p_mat_perm.todense())
+                        resid_perm = U_tilde - p_mat_perm.dot(U_perm)
+                        interaction_mat_perm = interaction_mat.iloc[perm_idxs,:]
+                        interaction_first_order_terms_perm, interaction_second_order_terms_perm = compute_interactions(p_mat_perm, interaction_mat_perm.values, resid_perm, alpha)                       
+                        U_perm = np.r_[U_perm, interaction_first_order_terms_perm, interaction_second_order_terms_perm]
+                        B_perm = U_perm.dot(W)
+                    
                     B_perms[:,i] = np.ravel(B_perm)
                 pvals = (B_perms < np.ravel(B)[:,np.newaxis]).sum(axis=1) / B_perms.shape[1]
                 pvals[pvals > 0.5] = 1 - pvals[pvals > 0.5] # get 2-sided pvalues
@@ -335,12 +412,6 @@ if __name__ == '__main__':
             qvals = pd.DataFrame(data = np.transpose(qvals), index = gnames, columns = pnames)
             pvals = signif(pvals, 3)
             qvals = signif(qvals, 3)
-
-        log.info('Outputting results...  ')
-        B_scaled = pd.DataFrame(data = np.transpose(B_scaled), index = gnames, columns = pnames)
-        B_scaled = signif(B_scaled, 3)
-        B_scaled.to_csv(args.out + '_LFCs.txt', sep = '\t')
-        if args.compute_pval:
             pvals.to_csv(args.out + '_pvals.txt', sep = '\t')
             qvals.to_csv(args.out + '_qvals.txt', sep = '\t')
 
@@ -364,40 +435,81 @@ if __name__ == '__main__':
                 for i, split_idx in enumerate(splits):
                     log.info('Split {}'.format(i+1))
                     if args.large_dataset:
-                        B_temp,_,_,_,_,_ = factorize_recover_large_dataset(dat.X[split_idx,:], p_mat[split_idx,:], pnames, args.rank, args.batches, control_perturbation_name=args.control_perturbation_name, alpha=alpha, cov_mat=cov_mat.iloc[split_idx,:], log=log)
+                        B_temp,U_temp,U_tilde_temp,_,_,_ = factorize_recover_large_dataset(dat.X[split_idx,:], p_mat[split_idx,:], pnames, args.rank, args.batches, control_perturbation_name=args.control_perturbation_name, alpha=alpha, cov_mat=cov_mat.iloc[split_idx,:], log=log)
                     else:
-                        B_temp,_,_,_,_,_ = factorize_recover(exp_mat[:,split_idx], p_mat[split_idx,:], args.rank, args.spca_alpha, log=log, alpha=alpha)
+                        B_temp,U_temp,U_tilde_temp,_,_,_ = factorize_recover(exp_mat[:,split_idx], p_mat[split_idx,:], args.rank, args.spca_alpha, log=log, alpha=alpha)
+
+                    if args.interaction_column_name: 
+                        p_mat_temp = np.array(p_mat[split_idx,:].todense())
+                        resid_temp = U_tilde_temp - p_mat_temp.dot(U_temp)
+                        interaction_mat_temp = interaction_mat.iloc[split_idx,:]
+                        interaction_first_order_terms_temp, interaction_second_order_terms_temp = compute_interactions(p_mat_temp, interaction_mat_temp.values, resid_temp, alpha)                       
+                        U_temp = np.r_[U_temp, interaction_first_order_terms_temp, interaction_second_order_terms_temp]
+                        B_temp = U_temp.dot(W)
                     B_temp,_ = scale_effs(B_temp, logmeanexp)
                     Bs.append(B_temp)
 
-                Bs = [x.flatten() for x in Bs]
-
                 temp_cors = []
                 temp_sc = []
-                if args.compute_pval: # compute correlation using significant effects
-                    cnames = ['q<{}_effects'.format(x) for x in [0.05, 0.2]]
-                    
-                    for cutoff in [0.05, 0.2]:
-                        idxs = (qvals.values < cutoff).flatten()
-                        if np.sum(idxs) == 0:
-                            cor = np.nan
-                            sc = np.nan
-                        else:    
-                            cor = np.corrcoef(Bs[0][idxs], Bs[1][idxs])[0,1]
-                            sc = sign_concord(Bs[0][idxs], Bs[1][idxs])
-                        temp_cors.append(cor)
-                        temp_sc.append(sc)
-                else: # compute correlation using top x% of effects by magnitude
 
+                # separately cross-validate for interaction effects
+                if args.interaction_column_name:
+                    if args.compute_pval and not args.temp_out:
+                        cnames = ['{}_{}'.format(x, y) for x in ['First_order_perturbation', 'First_order_condition', 'Second_order_interaction'] for y in ['top_0.1%', 'top_1%', 'q<0.05', 'q<0.2']]
+                    else:
+                        cnames = ['{}_top_{}%'.format(x, y) for x in ['First_order_perturbation', 'First_order_condition', 'Second_order_interaction'] for y in [0.1, 1]]
+                    etype_idxs = [0] + list(np.cumsum([p_mat.shape[1], interaction_mat.shape[1]])) + [B.shape[0] + 1]
+                    for i in range(3):
+                        temp_Bs = [x[etype_idxs[i]:etype_idxs[i+1],:].flatten() for x in Bs]
+                        sort_idxs = np.argsort(-np.abs(B_scaled.iloc[:,etype_idxs[i]:etype_idxs[i+1]].values.flatten()))
+                        cutoffs = np.round(np.array([0.001, 0.01]) * len(sort_idxs)).astype(int)
+
+                        for cutoff in cutoffs:
+                            cor = np.corrcoef(temp_Bs[0][sort_idxs[:cutoff]], temp_Bs[1][sort_idxs[:cutoff]])[0,1]
+                            sc = sign_concord(temp_Bs[0][sort_idxs[:cutoff]], temp_Bs[1][sort_idxs[:cutoff]])
+                            temp_cors.append(cor)
+                            temp_sc.append(sc)
+
+                        if args.compute_pval and not args.temp_out: # also compute correlation using significant effects
+                            temp_qvals = qvals.iloc[:,etype_idxs[i]:etype_idxs[i+1]]
+
+                            for cutoff in [0.05, 0.2]:
+                                idxs = (temp_qvals.values < cutoff).flatten()
+                                if np.sum(idxs) == 0:
+                                    cor = np.nan
+                                    sc = np.nan
+                                else:    
+                                    cor = np.corrcoef(temp_Bs[0][idxs], temp_Bs[1][idxs])[0,1]
+                                    sc = sign_concord(temp_Bs[0][idxs], temp_Bs[1][idxs])
+                                temp_cors.append(cor)
+                                temp_sc.append(sc)
+                        
+                else:
                     cnames = ['Top_{}%_effects'.format(x) for x in [0.1, 1]]
+                    Bs = [x.flatten() for x in Bs]
                     sort_idxs = np.argsort(-np.abs(B_scaled.values.flatten()))
                     cutoffs = np.round(np.array([0.001, 0.01]) * len(sort_idxs)).astype(int)
-
+    
                     for cutoff in cutoffs:
                         cor = np.corrcoef(Bs[0][sort_idxs[:cutoff]], Bs[1][sort_idxs[:cutoff]])[0,1]
                         sc = sign_concord(Bs[0][sort_idxs[:cutoff]], Bs[1][sort_idxs[:cutoff]])
                         temp_cors.append(cor)
                         temp_sc.append(sc)
+    
+                    if args.compute_pval and not args.temp_out: # also compute correlation using significant effects
+                        cnames.extend(['q<{}_effects'.format(x) for x in [0.05, 0.2]])
+                        
+                        for cutoff in [0.05, 0.2]:
+                            idxs = (qvals.values < cutoff).flatten()
+                            if np.sum(idxs) == 0:
+                                cor = np.nan
+                                sc = np.nan
+                            else:    
+                                cor = np.corrcoef(Bs[0][idxs], Bs[1][idxs])[0,1]
+                                sc = sign_concord(Bs[0][idxs], Bs[1][idxs])
+                            temp_cors.append(cor)
+                            temp_sc.append(sc)
+
                 all_cor.append(temp_cors)
                 all_sc.append(temp_sc)
                     
@@ -415,5 +527,4 @@ if __name__ == '__main__':
         log.info('Analysis finished at {T}'.format(T=time.ctime()))
         time_elapsed = round(time.time() - start_time, 2)
         log.info('Total time elapsed: {T}'.format(T=sec_to_str(time_elapsed)))
-
 
