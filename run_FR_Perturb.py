@@ -218,7 +218,8 @@ if __name__ == '__main__':
         keep_cells = scanpy.pp.filter_cells(dat, min_counts=1, inplace=False)[0]
         dat = dat[keep_cells,:]
         p_mat_pd = p_mat_pd[keep_cells,:]
-        cov_mat = cov_mat.loc[keep_cells,:]
+        if args.covariates is not None:
+            cov_mat = cov_mat.loc[keep_cells,:]
         log.info('Filtered {} cells with 0 expression across all genes'.format(prev_count - np.sum(keep_cells)))
 
         log.info('Retained {} cells and {} genes for analysis'.format(dat.shape[0], dat.shape[1]))
