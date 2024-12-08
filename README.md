@@ -15,6 +15,18 @@ conda activate FR-Perturb
 ```
 
 FR-Perturb is now ready to use. For comments/questions/issues with running the code, please contact douglasyao2@gmail.com. 
+
+# Table of contents
+- [Input](#input)
+- [Output](#output)
+- [Options for large datasets](#options-for-large-datasets)
+- [Other options](#other-options)
+  - [Gene names](#gene-names)
+  - [Significance testing parameters](#significance-testing-parameters)
+  - [Model hyperparameters](#model-hyperparameters)
+  - [Running other perturbation effect inference methods](#running-other-perturbation-effect-inference-methods)
+  - [Cross-validation](#cross-validation)
+
 # Input
 
 In order to estimate perturbation effect sizes, two things need to provided:
@@ -151,11 +163,11 @@ done
 
 FR-Perturb has additional options that can be used to tweak data processing, model hyperparameters, p-value calculation, and other things. 
 
-### Output
+### Gene names
 
 **1**. `--gene-column-name [GENE_COLUMN_NAME]`. By default, FR-Perturb will assume that the index of `.var` of the AnnData object represents gene names when outputting results. If a different column of `.var` corresponds to the desired gene names, then the column name should be specified with this flag. 
 
-### Significance testing 
+### Significance testing parameters 
 
 **1**. `--num-perms [NUM_PERMS]` specifies the number of permutations to perform for permutation testing. Default 1000. 
 
@@ -196,7 +208,6 @@ q<0.2_effects   0.62      0.82
 ```
 
 **2**. `--cross-validate-runs [CROSS_VALIDATE_RUNS]`. Number of times to repeat cross-validation. Cross-validation accuracy is averaged across runs. Default 2. 
-
 
 
 
