@@ -16,6 +16,10 @@ conda activate FR-Perturb
 
 FR-Perturb is now ready to use. For comments/questions/issues with running the code, please contact douglasyao2@gmail.com. 
 
+NOTE: This repository is no longer actively maintained.
+I’m not able to provide updates or bug fixes at this time, but you’re welcome to fork the code and modify it for your own use.
+Thanks for your understanding!
+
 # Table of contents
 - [Input](#input)
 - [Output](#output)
